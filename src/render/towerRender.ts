@@ -55,7 +55,7 @@ export function drawTowerPreview(ctx: CanvasRenderingContext2D, kind: TowerKind,
 
 // --- Turm-Kauf-/Erweiterungs-Leiste (oben im Defense-Feld) ---
 
-export type TowerPaletteKind = TowerKind | 'mirror' | 'expand-grid' | 'tower-info' | 'ammo-info'
+export type TowerPaletteKind = TowerKind | 'mirror' | 'expand-grid' | 'tower-info'
 
 export interface TowerPaletteItem {
   kind: TowerPaletteKind
@@ -83,7 +83,6 @@ export function buildTowerPalette(startX: number, y: number, gap: number): Tower
     { kind: 'mirror', name: 'Mirror', cost: BUILDING_COSTS.mirror, costResourceId: 'lumen' },
     { kind: 'expand-grid', name: 'Grid', cost: GRID_EXPAND_COST, costResourceId: 'prisma' },
     { kind: 'tower-info', name: 'Towers', cost: 0, costResourceId: 'lumen' },
-    { kind: 'ammo-info', name: 'Ammo', cost: 0, costResourceId: 'lumen' },
   ]
   const extraItems: TowerPaletteItem[] = extraKinds.map((item, i) => ({
     ...item,
@@ -108,8 +107,6 @@ export function towerPaletteItemDescription(kind: TowerPaletteKind): string {
       return 'Expand the Defense grid by one row and column'
     case 'tower-info':
       return 'Towers — shows every tower type with its stats'
-    case 'ammo-info':
-      return 'Ammo — shows every color and its combat effect'
     default:
       return getTowerDefinition(kind).description
   }
@@ -122,17 +119,6 @@ function drawTowerInfoIcon(ctx: CanvasRenderingContext2D, x: number, y: number, 
   drawTriangle(ctx, x - radius * 0.4, y + radius * 0.3, radius * 0.32, COLORS.textDim, 0, 0)
   drawSquare(ctx, x + radius * 0.4, y + radius * 0.3, radius * 0.24, COLORS.textDim, 0, 0)
   drawCircle(ctx, x, y - radius * 0.4, radius * 0.26, COLORS.textDim, 0)
-}
-
-/** Drei-Punkte-CMY-Icon fürs Munitions-Info-Icon — dieselbe Bildsprache wie das "INFO"-Icon
- * der Economy-Kauf-Leiste (siehe buildingRender.ts), weil es inhaltlich dasselbe Thema ist. */
-function drawAmmoInfoIcon(ctx: CanvasRenderingContext2D, x: number, y: number, radius: number) {
-  drawCircleOutline(ctx, x, y, radius, COLORS.textBright, 1.5, 6)
-  const dotColors = [getResource('cyan').color, getResource('magenta').color, getResource('yellow').color]
-  dotColors.forEach((color, i) => {
-    const angle = -Math.PI / 2 + (i / dotColors.length) * Math.PI * 2
-    drawCircle(ctx, x + radius * 0.55 * Math.cos(angle), y + radius * 0.55 * Math.sin(angle), 3, color, 4)
-  })
 }
 
 /** Kleine diagonale Linie — dasselbe Icon-Muster wie der Spiegel in der Economy-Kauf-Leiste
@@ -158,14 +144,13 @@ export function drawTowerPaletteItem(ctx: CanvasRenderingContext2D, item: TowerP
   if (item.kind === 'mirror') drawMirrorPaletteIcon(ctx, item.x, item.y, item.radius)
   else if (item.kind === 'expand-grid') drawHexagonOutline(ctx, item.x, item.y, item.radius, COLORS.gridLineStrong, 2)
   else if (item.kind === 'tower-info') drawTowerInfoIcon(ctx, item.x, item.y, item.radius)
-  else if (item.kind === 'ammo-info') drawAmmoInfoIcon(ctx, item.x, item.y, item.radius)
   else drawTowerShape(ctx, item.kind, item.x, item.y, item.radius, TOWER_UNSELECTED_COLOR, defaultTowerRotation(item.kind))
 
   ctx.textAlign = 'center'
   ctx.fillStyle = '#9aa0ab'
   ctx.font = '9px monospace'
   ctx.fillText(item.name, item.x, item.y + item.radius + 14)
-  if (item.kind === 'tower-info' || item.kind === 'ammo-info') {
+  if (item.kind === 'tower-info') {
     ctx.fillStyle = COLORS.textDim
     ctx.font = '10px monospace'
     ctx.fillText('INFO', item.x, item.y + item.radius + 26)

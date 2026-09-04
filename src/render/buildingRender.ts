@@ -2,12 +2,12 @@
 // Bautypen (Lichtquelle/Spiegel/Prisma/Container), ihre Kauf-Leiste, und die Lichtstrahlen
 // selbst. Reine Zeichenfunktionen, keine Simulation — siehe lightSimulation.ts dafür.
 
-import { COLORS } from '../constants/colors'
+import { COLORS, isColorDark } from '../constants/colors'
 import { getResource } from '../data/resources'
 import type { LightSource, Mirror, Prism } from '../economy/buildings'
 import type { BeamSegment, PrismStatus } from '../economy/lightSimulation'
 import { cellCenter, GRID_EXPAND_COST, type GridCoord, type HexDirection, type PlacementGrid } from '../grid/placementGrid'
-import { drawCircle, drawCircleOutline, drawHexagon, drawHexagonOutline, drawTriangle, strokeRoundedPolyline } from './shapes'
+import { drawCircle, drawCircleOutline, drawHexagon, drawHexagonOutline, drawTriangle, drawTriangleOutline, strokeRoundedPolyline } from './shapes'
 
 /** Pixel-Winkel (Grad) der 6 Hex-Richtungen — deckungsgleich mit den Nachbar-Deltas in
  * grid/placementGrid.ts (gerade Zeile), fürs Platzieren von Anschluss-Punkten/Spiegel-Linien. */
@@ -164,15 +164,24 @@ export function drawPrismEntity(ctx: CanvasRenderingContext2D, prism: Prism, cen
   const pulse = active ? 0.85 + 0.15 * Math.sin(((elapsedSeconds % PULSE_PERIOD_SECONDS) / PULSE_PERIOD_SECONDS) * Math.PI * 2) : 1
   const glow = active ? 18 * pulse : 8
 
+  // Ein aktives Prisma mit sehr dunkler Ausgabefarbe (v. a. Black, #000000) wäre sonst — Füllung
+  // UND Glow beide in derselben dunklen Farbe — auf dem fast-schwarzen Hintergrund praktisch
+  // unsichtbar und sähe wie ein untätiges Prisma aus, obwohl das Rezept erfüllt ist. Zusätzlicher,
+  // farbunabhängiger Rahmen macht "aktiv" in jedem Fall sichtbar.
+  const needsAccentRing = active && isColorDark(color)
+
   if (prism.prismKind === 'triangle') {
     // `prism.outputDirection` ist nur noch der Rotations-ANKER (legt fest, welche 3 der 6
     // Richtungen überhaupt Ecken sind) — welche dieser 3 Ecken GERADE der Output ist, kommt aus
     // `status.outputDirection` (siehe lightSimulation.ts deriveTriangleOutputDirection()).
-    drawTriangle(ctx, center.x, center.y, size, color, triangleRotationForOutput(prism.outputDirection), glow)
+    const rotation = triangleRotationForOutput(prism.outputDirection)
+    drawTriangle(ctx, center.x, center.y, size, color, rotation, glow)
+    if (needsAccentRing) drawTriangleOutline(ctx, center.x, center.y, size + 2, COLORS.textBright, 1.5, rotation)
     const corners: HexDirection[] = [prism.outputDirection, ((prism.outputDirection + 2) % 6) as HexDirection, ((prism.outputDirection + 4) % 6) as HexDirection]
     drawPrismPorts(ctx, center, status.sides, status.outputDirection, color, active, corners)
   } else {
     drawHexagon(ctx, center.x, center.y, size, color, 0, glow)
+    if (needsAccentRing) drawHexagonOutline(ctx, center.x, center.y, size + 2, COLORS.textBright, 1.5)
     drawPrismPorts(ctx, center, status.sides, prism.outputDirection, color, active)
   }
 }
@@ -272,7 +281,7 @@ export function drawBeamTraveler(ctx: CanvasRenderingContext2D, grid: PlacementG
 
 // --- Kauf-Leiste (oben im Economy-Feld) ---
 
-export type PaletteKind = 'source-cyan' | 'source-magenta' | 'source-yellow' | 'mirror' | 'prism-simple' | 'prism-complex' | 'container' | 'expand-grid' | 'color-wheel'
+export type PaletteKind = 'source-cyan' | 'source-magenta' | 'source-yellow' | 'mirror' | 'prism-simple' | 'prism-complex' | 'container' | 'expand-grid'
 
 export interface PaletteItem {
   kind: PaletteKind
@@ -295,7 +304,6 @@ export function buildPalette(startX: number, y: number, gap: number): PaletteIte
     { kind: 'prism-complex', cost: 50, costResourceId: 'lumen' },
     { kind: 'container', cost: 8, costResourceId: 'lumen' },
     { kind: 'expand-grid', cost: GRID_EXPAND_COST, costResourceId: 'prisma' },
-    { kind: 'color-wheel', cost: 0, costResourceId: 'lumen' },
   ]
   return specs.map((spec, i) => ({ ...spec, x: startX + i * gap, y, radius: PALETTE_RADIUS }))
 }
@@ -329,8 +337,6 @@ export function paletteItemDescription(kind: PaletteKind): string {
       return 'Container — stores rate from up to N different colors, based on its level'
     case 'expand-grid':
       return 'Expand the Economy grid by one row and column'
-    case 'color-wheel':
-      return 'Color Wheel — shows every color and how it is mixed'
   }
 }
 
@@ -372,26 +378,11 @@ export function drawPaletteItem(ctx: CanvasRenderingContext2D, item: PaletteItem
     case 'expand-grid':
       drawHexagonOutline(ctx, item.x, item.y, item.radius, COLORS.gridLineStrong, 2)
       break
-    case 'color-wheel': {
-      drawCircleOutline(ctx, item.x, item.y, item.radius, COLORS.textBright, 1.5, 6)
-      const dotColors = [getResource('cyan').color, getResource('magenta').color, getResource('yellow').color]
-      dotColors.forEach((color, i) => {
-        const angle = -Math.PI / 2 + (i / dotColors.length) * Math.PI * 2
-        drawCircle(ctx, item.x + item.radius * 0.55 * Math.cos(angle), item.y + item.radius * 0.55 * Math.sin(angle), 3, color, 4)
-      })
-      break
-    }
   }
 
   ctx.textAlign = 'center'
-  if (item.kind === 'color-wheel') {
-    ctx.fillStyle = COLORS.textDim
-    ctx.font = '10px monospace'
-    ctx.fillText('INFO', item.x, item.y + item.radius + 16)
-  } else {
-    ctx.fillStyle = getResource(item.costResourceId).color
-    ctx.font = '10px monospace'
-    ctx.fillText(`${item.cost}`, item.x, item.y + item.radius + 16)
-  }
+  ctx.fillStyle = getResource(item.costResourceId).color
+  ctx.font = '10px monospace'
+  ctx.fillText(`${item.cost}`, item.x, item.y + item.radius + 16)
   ctx.restore()
 }

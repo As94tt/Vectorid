@@ -63,7 +63,6 @@ import {
 } from './render/buildingRender'
 import { buildHudButtons, drawHud, hitTestButton, HUD_HEIGHT, type HudButton } from './render/hud'
 import { buildWheelLayout, drawColorWheelPanel, hitTestWheelClose, hitTestWheelSwatch, type WheelSwatch } from './render/colorWheelPanel'
-import { drawInfoImagePanel, hitTestInfoImageClose } from './render/infoImagePanel'
 import {
   buildTowerPalette,
   drawTowerEntity,
@@ -76,13 +75,13 @@ import {
 } from './render/towerRender'
 import { getEffectiveTowerStats, createTower, getTowerDefinition, towerUpgradeCost, TOWER_MAX_LEVEL, type PlacedTower, type TowerKind } from './towerdefense/towers'
 import { getResource, RESOURCES } from './data/resources'
-import { drawHexagon, drawLabel } from './render/shapes'
+import { drawCircleOutline, drawHexagon, drawLabel } from './render/shapes'
 import { drawPath, type Point } from './towerdefense/path'
 import { updateProjectiles, updateTowers, pruneVisualEffects, type Projectile, type VisualEffect } from './towerdefense/combat'
 import { pruneEnemies, tickEnemy, type Enemy } from './towerdefense/enemies'
 import { createWaveState, isBossWave, registerLeak, tickWaveSpawning, BOSS_LUMEN_MULTIPLIER, type WaveState } from './towerdefense/waves'
 import { drawEnemies, drawProjectiles, drawTowerCombatEffects, drawVisualEffects } from './render/combatRender'
-import { drawTowerReferencePanel, hitTestReferencePanelClose } from './render/referencePanels'
+import { drawColorGuidePanel, drawTowerReferencePanel, hitTestReferencePanelClose } from './render/referencePanels'
 
 const canvas = document.getElementById('scene') as HTMLCanvasElement
 const ctx = canvas.getContext('2d')
@@ -99,18 +98,20 @@ const playerLevel = 1
 let hudButtons: HudButton[] = []
 let paletteItems: PaletteItem[] = []
 
-// Farbwheel-Panel (Overlay, blockiert währenddessen alle anderen Interaktionen): entweder
-// reiner Info-Modus (aus dem Economy-"INFO"-Icon) oder Munitions-Auswahl für einen Turm
-// (aus dem Anklicken eines platzierten, noch farblosen oder umzufärbenden Turms).
-let wheelMode: 'closed' | 'info' | 'ammo' = 'closed'
+// Farbwheel-Panel (Overlay, blockiert währenddessen alle anderen Interaktionen): Munitions-
+// Auswahl für einen Turm (aus dem Anklicken eines platzierten, noch farblosen oder
+// umzufärbenden Turms, bzw. der "Ammo"-Zeile in dessen Info-Panel).
+let wheelMode: 'closed' | 'ammo' = 'closed'
 let ammoTargetTowerId: string | null = null
 let wheelSwatches: WheelSwatch[] = []
 let hoveredWheelResourceId: string | null = null
 
-// Zwei Nachschlage-Seiten auf der Defense-Seite (aus der Turm-Kauf-Leiste geöffnet, siehe
-// 'tower-info'/'ammo-info'-Icons): reine Anzeige, blockiert wie das Farbwheel alle anderen
-// Interaktionen, solange offen.
-let defenseInfoMode: 'closed' | 'towers' | 'ammo' = 'closed'
+// Nachschlage-Seite "Türme" auf der Defense-Seite (aus dem 'tower-info'-Icon der Kauf-Leiste
+// geöffnet): reine Anzeige, blockiert wie das Farbwheel alle anderen Interaktionen, solange offen.
+let towersInfoOpen = false
+// Kombinierte Farb-/Effekt-Hilfeseite (neues Icon zwischen Economy- und Defense-Seite, siehe
+// drawHelpToggle()) — ersetzt die früheren getrennten "Colors"/"Effekte"-Bildseiten.
+let colorGuideOpen = false
 
 // Info-Panel (Klick auf ein Gebäude/einen Turm): zeigt Name/Level/Produktionsdaten bzw.
 // Name/Munition/Level. Blockiert wie das Farbwheel alle anderen Interaktionen, solange offen.
@@ -214,12 +215,12 @@ function buildDemoEconomy() {
   }
   placementGrid.originX = rightEdge - gridPixelWidth(placementGrid)
 
-  // Cyan-Quelle + direkt nördlich angrenzender Container zeigen das Grundprinzip sofort vor;
-  // Magenta/Yellow und beide Prismen liegen noch ungenutzt da, damit der Spieler sie selbst
-  // per Spiegel verdrahten kann.
-  lightSources = [createLightSource(0, 3, 'cyan'), createLightSource(1, 3, 'magenta'), createLightSource(2, 3, 'yellow')]
+  // User-Vorgabe: zum Start nur ein Cyan-Generator + ein Container (direkt nördlich angrenzend,
+  // zeigt das Grundprinzip sofort vor) — alles Weitere (Magenta/Yellow, Spiegel, Prismen) baut
+  // der Spieler sich selbst.
+  lightSources = [createLightSource(0, 3, 'cyan')]
   mirrors = []
-  prisms = [createPrism(3, 0, 'triangle'), createPrism(0, 0, 'hexagon')]
+  prisms = []
   containers = [createContainer(0, 2)]
   rebuildOccupancy()
   buildingsReady = true
@@ -557,14 +558,8 @@ function expandGrid() {
 canvas.addEventListener('pointerdown', (e) => {
   const pos = pointerPos(e)
 
-  // Farbwheel-Panel blockiert alle anderen Interaktionen, solange es offen ist. 'info' zeigt nur
-  // Assets/InfoColors.png als Bild (siehe render/infoImagePanel.ts, eigener Close-Hit-Test),
-  // 'ammo' ist die eigentliche, klickbare Munitions-Auswahl (render/colorWheelPanel.ts).
+  // Farbwheel-Panel (Munitions-Auswahl) blockiert alle anderen Interaktionen, solange offen.
   if (wheelMode !== 'closed') {
-    if (wheelMode === 'info') {
-      if (hitTestInfoImageClose('colors', width, height, pos.x, pos.y)) wheelMode = 'closed'
-      return
-    }
     if (hitTestWheelClose(width, height, pos.x, pos.y)) {
       wheelMode = 'closed'
       ammoTargetTowerId = null
@@ -611,14 +606,13 @@ canvas.addEventListener('pointerdown', (e) => {
     return
   }
 
-  // Türme-/Munitions-Infoseite blockiert ebenso alle anderen Interaktionen, solange offen —
-  // reine Anzeige, einziger Klick-Handler ist das Schließen. "Ammo" zeigt nur Assets/
-  // ColorEffects.png als Bild (eigener Close-Hit-Test, siehe render/infoImagePanel.ts).
-  if (defenseInfoMode !== 'closed') {
-    if (defenseInfoMode === 'ammo') {
-      if (hitTestInfoImageClose('effects', width, height, pos.x, pos.y)) defenseInfoMode = 'closed'
-    } else if (hitTestReferencePanelClose(width, height, pos.x, pos.y)) {
-      defenseInfoMode = 'closed'
+  // Türme-Infoseite bzw. der kombinierte Farb-Guide blockieren ebenso alle anderen
+  // Interaktionen, solange offen — reine Anzeige, einziger Klick-Handler ist das Schließen
+  // (beide teilen sich dieselbe Panel-Chrome/Close-Position, siehe referencePanels.ts).
+  if (towersInfoOpen || colorGuideOpen) {
+    if (hitTestReferencePanelClose(width, height, pos.x, pos.y)) {
+      towersInfoOpen = false
+      colorGuideOpen = false
     }
     return
   }
@@ -629,10 +623,14 @@ canvas.addEventListener('pointerdown', (e) => {
     return
   }
 
+  if (hitTestHelpToggle(pos.x, pos.y)) {
+    colorGuideOpen = true
+    return
+  }
+
   const paletteItem = hitTestPalette(paletteItems, pos.x, pos.y)
   if (paletteItem) {
     if (paletteItem.kind === 'expand-grid') expandGrid()
-    else if (paletteItem.kind === 'color-wheel') wheelMode = 'info'
     else {
       placingNewKind = paletteItem.kind
       placingCursor = pos
@@ -643,8 +641,7 @@ canvas.addEventListener('pointerdown', (e) => {
   const towerPaletteItem = hitTestTowerPalette(towerPaletteItems, pos.x, pos.y)
   if (towerPaletteItem) {
     if (towerPaletteItem.kind === 'expand-grid') expandDefenseGrid()
-    else if (towerPaletteItem.kind === 'tower-info') defenseInfoMode = 'towers'
-    else if (towerPaletteItem.kind === 'ammo-info') defenseInfoMode = 'ammo'
+    else if (towerPaletteItem.kind === 'tower-info') towersInfoOpen = true
     else {
       placingTowerKind = towerPaletteItem.kind
       placingTowerCursor = pos
@@ -703,10 +700,11 @@ canvas.addEventListener('pointermove', (e) => {
     return
   }
   if (infoTarget) return
-  if (defenseInfoMode !== 'closed') return
+  if (towersInfoOpen || colorGuideOpen) return
 
   hoveredEconomyItem = hitTestPalette(paletteItems, pos.x, pos.y)
   hoveredTowerItem = hitTestTowerPalette(towerPaletteItems, pos.x, pos.y)
+  helpToggleHovered = hitTestHelpToggle(pos.x, pos.y)
 
   if (pendingPress) {
     const dist = Math.hypot(pos.x - pendingPress.downPos.x, pos.y - pendingPress.downPos.y)
@@ -917,6 +915,43 @@ function drawDivider() {
   ctx!.restore()
 }
 
+const HELP_TOGGLE_RADIUS = 13
+let helpToggleHovered = false
+
+/** Sitzt direkt auf der Trennlinie zwischen Economy- und Defense-Seite (User-Vorgabe: "zwischen
+ * der economy und der defenseseite") — öffnet den kombinierten Farb-Guide (siehe
+ * referencePanels.ts drawColorGuidePanel()), der die beiden früheren Bild-Infoseiten ersetzt. */
+function helpToggleCenter(): Point {
+  return { x: economyZoneWidth, y: HUD_HEIGHT + 20 }
+}
+
+function hitTestHelpToggle(x: number, y: number): boolean {
+  const c = helpToggleCenter()
+  return Math.hypot(c.x - x, c.y - y) <= HELP_TOGGLE_RADIUS + 6
+}
+
+function drawHelpToggle() {
+  const c = helpToggleCenter()
+  ctx!.save()
+  ctx!.fillStyle = COLORS.background
+  ctx!.beginPath()
+  ctx!.arc(c.x, c.y, HELP_TOGGLE_RADIUS + 3, 0, Math.PI * 2)
+  ctx!.fill()
+  ctx!.restore()
+
+  drawCircleOutline(ctx!, c.x, c.y, HELP_TOGGLE_RADIUS, COLORS.textBright, 1.5, helpToggleHovered ? 12 : 6)
+
+  ctx!.save()
+  ctx!.textAlign = 'center'
+  ctx!.textBaseline = 'middle'
+  ctx!.fillStyle = COLORS.textBright
+  ctx!.font = 'bold 13px monospace'
+  ctx!.fillText('?', c.x, c.y + 1)
+  ctx!.restore()
+
+  if (helpToggleHovered) drawLabel(ctx!, 'Color Guide — mixing & effects', c.x, c.y - HELP_TOGGLE_RADIUS - 12, '11px monospace', COLORS.textBright, 15)
+}
+
 function drawEconomyPalette() {
   for (const item of paletteItems) {
     drawPaletteItem(ctx!, item, canAfford(inventory, item.costResourceId, item.cost))
@@ -929,7 +964,7 @@ function drawTowerPalette() {
   }
 }
 
-const TOWER_PALETTE_EXTRA_KINDS = new Set(['mirror', 'expand-grid', 'tower-info', 'ammo-info'])
+const TOWER_PALETTE_EXTRA_KINDS = new Set(['mirror', 'expand-grid', 'tower-info'])
 
 /** Hover-Tooltip über einem Kauf-Leisten-Icon (Economy ODER Defense) — Name + kurzer Zweck,
  * siehe paletteItemDescription()/towerPaletteItemDescription(). Nutzt denselben Chip-Look wie das
@@ -938,7 +973,7 @@ function drawPaletteTooltips() {
   // Sobald ein Modal offen ist, aktualisiert pointermove hoveredEconomyItem/hoveredTowerItem
   // nicht mehr (siehe early returns dort) — ohne diese Sperre würde sonst ein stehen gebliebenes
   // Tooltip vom Icon-Klick, der das Modal gerade erst geöffnet hat, sichtbar bleiben.
-  if (wheelMode !== 'closed' || infoTarget || defenseInfoMode !== 'closed') return
+  if (wheelMode !== 'closed' || infoTarget || towersInfoOpen || colorGuideOpen) return
   if (hoveredEconomyItem) {
     const item = hoveredEconomyItem
     drawLabel(ctx!, paletteItemDescription(item.kind), item.x, item.y - item.radius - 14, '11px monospace', COLORS.textBright, 15)
@@ -1419,6 +1454,7 @@ function render(_dt: number) {
   ctx!.fillRect(0, 0, width, height)
 
   drawDivider()
+  drawHelpToggle()
   drawEconomyPalette()
   drawBuildings()
   drawTowerPalette()
@@ -1434,14 +1470,12 @@ function render(_dt: number) {
 
   drawHud(ctx!, width, inventory, computeResourceRates(), playerName, playerLevel, hudButtons, demolishMode)
 
-  if (wheelMode === 'info') {
-    drawInfoImagePanel(ctx!, width, height, 'colors')
-  } else if (wheelMode === 'ammo' && ammoTargetTowerId) {
+  if (wheelMode === 'ammo' && ammoTargetTowerId) {
     drawColorWheelPanel(ctx!, width, height, wheelSwatches, hoveredWheelResourceId, computeResourceRates(ammoTargetTowerId), unavailableAmmoIds(ammoTargetTowerId))
   }
 
-  if (defenseInfoMode === 'towers') drawTowerReferencePanel(ctx!, width, height)
-  else if (defenseInfoMode === 'ammo') drawInfoImagePanel(ctx!, width, height, 'effects')
+  if (towersInfoOpen) drawTowerReferencePanel(ctx!, width, height)
+  else if (colorGuideOpen) drawColorGuidePanel(ctx!, width, height)
 
   drawInfoPanel()
 }

@@ -234,3 +234,22 @@ export function applyAmmoEffect(resourceId: string | null, damage: number, targe
       return
   }
 }
+
+/** Kurzbeschreibungen für die kombinierte Hilfeseite (siehe render/referencePanels.ts
+ * drawColorGuidePanel()) — 1:1 aus Assets/ColorEffects.png destilliert, eine knappe Zeile je Farbe. */
+export const COLOR_EFFECT_INFO: Record<string, { name: string; description: string }> = {
+  cyan: { name: 'Minor Slow', description: 'Slightly slows the target.' },
+  magenta: { name: 'Bonus Damage', description: 'Extra direct damage per hit.' },
+  yellow: { name: 'Chain Lightning', description: 'Jumps to up to 3 enemies.' },
+  blue: { name: 'Slow', description: 'Stacking slow, up to 10 stacks.' },
+  red: { name: 'Burn', description: 'Stacking burn, up to 10 stacks.' },
+  green: { name: 'Poison', description: 'Resets poison to 10 stacks.' },
+  cerulean: { name: 'Freeze', description: 'At 30 stacks: freeze for 1s.' },
+  violet: { name: 'Vulnerability', description: 'Up to +10% damage taken.' },
+  chartreuse: { name: 'Stack Spread', description: 'Spreads Tier 3 stacks to nearby enemies.' },
+  aquamarine: { name: 'Pull', description: 'Pulls nearby enemies together.' },
+  fuchsia: { name: 'Scaling Chain Lightning', description: 'More stacks = more chained targets.' },
+  amber: { name: 'Explosion', description: 'At 30 stacks: AoE damage.' },
+  black: { name: 'Execute', description: 'Raises execute threshold per hit.' },
+  white: { name: 'Purge Burst', description: 'Consumes all stacks for burst damage.' },
+}

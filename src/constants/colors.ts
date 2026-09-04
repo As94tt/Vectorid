@@ -28,10 +28,22 @@ export type ColorToken = (typeof COLORS)[keyof typeof COLORS]
  * render/referencePanels.ts, render/colorWheelPanel.ts): sehr dunkle Farben wie Black (#000000)
  * oder Blue (#0000FF) wären auf dem fast-schwarzen Panel-Hintergrund unlesbar — fällt dann auf
  * `textBright` zurück, sonst bleibt die Ressourcenfarbe erhalten. */
-export function readableTextColor(hex: string): string {
+function luminanceOf(hex: string): number {
   const r = parseInt(hex.slice(1, 3), 16)
   const g = parseInt(hex.slice(3, 5), 16)
   const b = parseInt(hex.slice(5, 7), 16)
-  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
-  return luminance < 0.35 ? COLORS.textBright : hex
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255
+}
+
+export function readableTextColor(hex: string): string {
+  return luminanceOf(hex) < 0.35 ? COLORS.textBright : hex
+}
+
+/** Für gefüllte Formen, die sonst 1:1 in einer Ressourcenfarbe gerendert würden (siehe
+ * render/buildingRender.ts drawPrismEntity()): eine Füllung + gleichfarbiger Glow in Black
+ * (#000000) ist auf dem fast-schwarzen Hintergrund praktisch unsichtbar — ein "aktiv, aber man
+ * sieht es nicht"-Zustand, der wie "nichts passiert" aussieht. Solche Fälle brauchen einen
+ * zusätzlichen, farbunabhängigen Akzent-Rahmen. */
+export function isColorDark(hex: string): boolean {
+  return luminanceOf(hex) < 0.35
 }

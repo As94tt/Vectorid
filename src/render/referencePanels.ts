@@ -1,12 +1,17 @@
-// Nachschlage-Seite "Türme" für die Defense-Seite (aus dem 'tower-info'-Icon in towerRender.ts
-// heraus geöffnet) — listet alle 8 Turmtypen mit Beschreibung + Kampf-Werten. Die frühere, hier
-// nachgebaute "Munition"-Seite zeigt jetzt stattdessen direkt Assets/ColorEffects.png (siehe
-// render/infoImagePanel.ts, User-Vorgabe: "just use the .png picture ... no need to recreate
-// them"). Rein informativ, blockiert wie das Farbwheel alle anderen Interaktionen, solange offen
-// (siehe main.ts).
+// Zwei Nachschlage-Seiten, beide über je ein eigenes Icon geöffnet (main.ts hält den offenen
+// Zustand): "Türme" (aus dem 'tower-info'-Icon der Defense-Kauf-Leiste, siehe towerRender.ts)
+// listet alle 8 Turmtypen mit Beschreibung + Kampf-Werten. Der "Farb-Guide" (aus dem neuen Hilfe-
+// Icon zwischen Economy- und Defense-Seite, siehe main.ts drawHelpToggle()) fasst KURZ zusammen,
+// woraus jede Farbe gemischt wird UND welchen Kampfeffekt sie hat — ersetzt die beiden früheren,
+// separaten Bild-Infoseiten (Assets/InfoColors.png/ColorEffects.png), die der User stattdessen
+// als eine einzige knappe Seite wollte. Rein informativ, blockiert wie das Farbwheel alle
+// anderen Interaktionen, solange offen (siehe main.ts).
 
-import { COLORS } from '../constants/colors'
+import { COLORS, readableTextColor } from '../constants/colors'
+import { getResource, RESOURCES } from '../data/resources'
+import { COLOR_EFFECT_INFO } from '../towerdefense/ammoEffects'
 import { TOWER_DEFINITIONS } from '../towerdefense/towers'
+import { drawCircle, drawCircleOutline } from './shapes'
 import { drawTowerPreview, TOWER_UNSELECTED_COLOR } from './towerRender'
 
 const PANEL_FILL = '#0b0d12'
@@ -153,6 +158,64 @@ export function drawTowerReferencePanel(ctx: CanvasRenderingContext2D, width: nu
     ctx.font = '10px monospace'
     ctx.fillText(`Damage ${def.damage}  ·  Range ${def.range}px  ·  Consumption ${def.consumption}/s`, textX, cellY + cellH - 22)
     ctx.fillText(`Rate ${attackSpeed}/s  ·  Projectile ${projectile}`, textX, cellY + cellH - 10)
+    ctx.restore()
+  })
+}
+
+/** Kurze "woraus gemischt"-Angabe je Farbe fürs kombinierte Guide (Tier 1 = gekauft, Tier 2-4 =
+ * Dreieck-Rezept, Tier 5 = die 3 benannten Hexagon-Zutaten — siehe data/resources.ts). Bewusst
+ * nur EIN Rezept je Farbe statt beider Alternativen, damit die Seite knapp bleibt. */
+function mixSourceText(resource: (typeof RESOURCES)[number]): string {
+  if (resource.tier === 1) return 'purchased'
+  if (resource.triangleRecipe) return resource.triangleRecipe.map((id) => getResource(id).name).join(' + ')
+  if (resource.hexagonNamedRecipe) return resource.hexagonNamedRecipe.map((id) => getResource(id).name).join(' + ')
+  return '—'
+}
+
+/** Kombinierte Hilfeseite: pro Farbe eine kompakte Zeile mit Misch-Herkunft + Kampf-Effekt.
+ * Ersetzt die beiden früheren Bild-Infoseiten (siehe Datei-Kommentar oben). */
+export function drawColorGuidePanel(ctx: CanvasRenderingContext2D, width: number, height: number) {
+  const bounds = drawPanelChrome(ctx, width, height, 'C O L O R   G U I D E', 'How mixing works and what each color does')
+
+  const resources = RESOURCES.filter((r) => r.tier !== 'special')
+  const cols = 2
+  const rows = Math.ceil(resources.length / cols)
+  const padding = 20
+  const contentX = bounds.x + padding
+  const contentY = bounds.y + 60
+  const contentW = bounds.width - padding * 2
+  const contentH = bounds.height - 60 - padding
+  const cellW = contentW / cols
+  const cellH = contentH / rows
+
+  resources.forEach((resource, i) => {
+    const col = i % cols
+    const row = Math.floor(i / cols)
+    const cellX = contentX + col * cellW
+    const cellY = contentY + row * cellH
+    const swatchCenter = { x: cellX + 14, y: cellY + cellH / 2 - 6 }
+    const textX = cellX + 30
+    const effect = COLOR_EFFECT_INFO[resource.id]
+
+    drawCircle(ctx, swatchCenter.x, swatchCenter.y, 9, resource.color, 7)
+    drawCircleOutline(ctx, swatchCenter.x, swatchCenter.y, 9, COLORS.gridLineStrong, 1, 0)
+
+    ctx.save()
+    ctx.textAlign = 'left'
+    ctx.fillStyle = readableTextColor(resource.color)
+    ctx.font = 'bold 12px monospace'
+    ctx.fillText(resource.name, textX, cellY + cellH / 2 - 10)
+
+    ctx.fillStyle = COLORS.textMid
+    ctx.font = '10px monospace'
+    ctx.fillText(`from ${mixSourceText(resource)}`, textX, cellY + cellH / 2 + 4)
+
+    if (effect) {
+      ctx.fillStyle = COLORS.textMid
+      ctx.font = '9px monospace'
+      const line = wrapLines(ctx, `${effect.name}: ${effect.description}`, cellW - (textX - cellX) - 10, 1)[0]
+      if (line) ctx.fillText(line, textX, cellY + cellH / 2 + 19)
+    }
     ctx.restore()
   })
 }

@@ -186,11 +186,12 @@ export function drawTriangleOutline(
   size: number,
   color: string,
   lineWidth = 1.5,
+  rotation = 0,
 ) {
   ctx.save()
   ctx.strokeStyle = color
   ctx.lineWidth = lineWidth
-  regularPolygonPath(ctx, x, y, size, 3, 0)
+  regularPolygonPath(ctx, x, y, size, 3, rotation)
   ctx.stroke()
   ctx.restore()
 }
