@@ -328,8 +328,8 @@ function buildDefenseNetwork() {
     originX: defenseZoneX + 48,
     originY: HUD_HEIGHT + 126,
   }
-  spawnNode = { col: DEFENSE_STARTING_GRID_SIZE - 1, row: 0 }
-  spawnDirection = 3 // zeigt zu Beginn ins Rasterinnere (Spawn sitzt oben-rechts)
+  spawnNode = { col: 0, row: 0 } // User-Vorgabe: Standard-Startpunkt ist das Feld oben links
+  spawnDirection = 0 // zeigt zu Beginn ins Rasterinnere (Spawn sitzt oben-links)
   defenseMirrors = []
   towers = []
   enemies = []

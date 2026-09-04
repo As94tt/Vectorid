@@ -125,7 +125,7 @@ export interface CreateEnemyOptions {
 
 let enemyCounter = 0
 export function createEnemy(options: CreateEnemyOptions = {}): Enemy {
-  const { hp = 30, baseSpeed = 28, armor = 0.1, size = ENEMY_BASE_SIZE, isBoss = false } = options
+  const { hp = 30, baseSpeed = 56, armor = 0.1, size = ENEMY_BASE_SIZE, isBoss = false } = options
   enemyCounter += 1
   return {
     id: `enemy-${enemyCounter}`,
