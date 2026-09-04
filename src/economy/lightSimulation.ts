@@ -404,9 +404,13 @@ function resolveHexagonOutput(counts: { c: number; m: number; y: number }, prese
     )
     if (ratioMatch) return ratioMatch
   }
+  // Bewusst kein Größenvergleich wie bei resolveTriangleOutput() — ein Dreieck kann geometrisch
+  // NIE mehr als 2 Eingänge haben, ein Hexagon aber bis zu 5 (siehe registerHit()). Black/White
+  // brauchen nur GENAU 3 bestimmte Farben ANLIEGEND, zusätzliche (z. B. weitere angeschlossene,
+  // fürs Rezept irrelevante) Eingänge dürfen das nicht verhindern — sonst würde "bis zu 5
+  // Eingänge" für diese beiden Farben faktisch nie mehr als exakt 3 erlauben.
   for (const r of RESOURCES) {
     if (!r.hexagonNamedRecipe) continue
-    if (r.hexagonNamedRecipe.length !== presentColors.size) continue
     if (r.hexagonNamedRecipe.every((id) => presentColors.has(id))) return r
   }
   return null
