@@ -40,19 +40,26 @@ import {
   type PlacementGrid,
 } from './grid/placementGrid'
 import { buildDefenseLookup, traceDefensePath, type Occupancy } from './grid/routing'
-import { addToInventory, canAfford, cheatAddTenToAll, createInventory, spend, type Inventory } from './economy/inventory'
+import { addToInventory, canAfford, cheatAddHundredToAll, createInventory, spend, type Inventory } from './economy/inventory'
 import {
   buildPalette,
+  containerRadius,
   drawBeamSegment,
   drawBeamTraveler,
   drawCellHighlight,
   drawContainerEntity,
   drawLightSourceEntity,
+  drawMaxLevelCellMarker,
   drawMirrorEntity,
   drawPaletteItem,
   drawPrismEntity,
   hitTestPalette,
+  isContainerMaxed,
+  isPrismMaxed,
+  isSourceMaxed,
   paletteItemDescription,
+  prismSize,
+  sourceOuterRadius,
   sourceResourceIdForPalette,
   CONTAINER_SIZE,
   PRISM_COMPLEX_SIZE,
@@ -388,17 +395,16 @@ interface EconomyHit {
 
 function hitTestEconomyBuilding(x: number, y: number): EconomyHit | null {
   for (const source of lightSources) {
-    if (Math.hypot(buildingCenter(source).x - x, buildingCenter(source).y - y) <= SOURCE_OUTER_SIZE + 6) return { kind: 'source', id: source.id }
+    if (Math.hypot(buildingCenter(source).x - x, buildingCenter(source).y - y) <= sourceOuterRadius(source) + 6) return { kind: 'source', id: source.id }
   }
   for (const mirror of mirrors) {
     if (Math.hypot(buildingCenter(mirror).x - x, buildingCenter(mirror).y - y) <= placementGrid.cellSize * 0.45) return { kind: 'mirror', id: mirror.id }
   }
   for (const prism of prisms) {
-    const size = prism.prismKind === 'triangle' ? PRISM_SIMPLE_SIZE : PRISM_COMPLEX_SIZE
-    if (Math.hypot(buildingCenter(prism).x - x, buildingCenter(prism).y - y) <= size + 6) return { kind: 'prism', id: prism.id }
+    if (Math.hypot(buildingCenter(prism).x - x, buildingCenter(prism).y - y) <= prismSize(prism) + 6) return { kind: 'prism', id: prism.id }
   }
   for (const container of containers) {
-    if (Math.hypot(buildingCenter(container).x - x, buildingCenter(container).y - y) <= CONTAINER_SIZE + 6) return { kind: 'container', id: container.id }
+    if (Math.hypot(buildingCenter(container).x - x, buildingCenter(container).y - y) <= containerRadius(container) + 6) return { kind: 'container', id: container.id }
   }
   return null
 }
@@ -407,8 +413,7 @@ const PRISM_LEVEL_BADGE_RADIUS = 10
 
 function prismLevelBadgeCenter(prism: Prism): Point {
   const center = buildingCenter(prism)
-  const size = prism.prismKind === 'triangle' ? PRISM_SIMPLE_SIZE : PRISM_COMPLEX_SIZE
-  return { x: center.x, y: center.y + size + 14 }
+  return { x: center.x, y: center.y + prismSize(prism) + 14 }
 }
 
 /** Kleiner "Lv.N"-Badge unterhalb jedes Prismas, eigens hit-getestet (siehe attemptPrismLevelUp())
@@ -552,7 +557,7 @@ let movingKind: 'source' | 'mirror' | 'prism' | 'container' | 'tower' | 'defense
 let movingCursor: Point | null = null
 
 function handleHudButton(id: HudButton['id']) {
-  if (id === 'cheat') cheatAddTenToAll(inventory)
+  if (id === 'cheat') cheatAddHundredToAll(inventory)
   else if (id === 'demolish') demolishMode = !demolishMode
   // 'settings' und 'save': absichtlich ohne Funktion (User-Wunsch — noch keine Logik dahinter).
 }
@@ -1414,6 +1419,16 @@ function drawBuildings() {
   drawPlacementPreview()
   drawMovePreview()
 
+  for (const source of lightSources) {
+    if (isSourceMaxed(source)) drawMaxLevelCellMarker(ctx!, placementGrid, { col: source.col, row: source.row })
+  }
+  for (const prism of prisms) {
+    if (isPrismMaxed(prism)) drawMaxLevelCellMarker(ctx!, placementGrid, { col: prism.col, row: prism.row })
+  }
+  for (const container of containers) {
+    if (isContainerMaxed(container)) drawMaxLevelCellMarker(ctx!, placementGrid, { col: container.col, row: container.row })
+  }
+
   for (const source of lightSources) drawLightSourceEntity(ctx!, source, buildingCenter(source), elapsedSeconds)
   for (const mirror of mirrors) drawMirrorEntity(ctx!, mirror, buildingCenter(mirror), placementGrid.cellSize)
   for (const prism of prisms) {
@@ -1423,7 +1438,7 @@ function drawBuildings() {
   }
   for (const container of containers) {
     const rates = lightSimulation.containerRates.get(container.id)
-    drawContainerEntity(ctx!, buildingCenter(container), rates ? [...rates.keys()] : [])
+    drawContainerEntity(ctx!, container, buildingCenter(container), rates ? [...rates.keys()] : [])
   }
 }
 

@@ -34,7 +34,7 @@ export function spend(inventory: Inventory, resourceId: string, amount: number):
   return true
 }
 
-/** Cheat: +10 Einheiten auf jede Ressource (Grund- und hergestellte Farben, Lumen, Prisma). */
-export function cheatAddTenToAll(inventory: Inventory) {
-  for (const resource of RESOURCES) addToInventory(inventory, resource.id, 10)
+/** Cheat: +100 Einheiten auf jede Ressource (Grund- und hergestellte Farben, Lumen, Prisma). */
+export function cheatAddHundredToAll(inventory: Inventory) {
+  for (const resource of RESOURCES) addToInventory(inventory, resource.id, 100)
 }

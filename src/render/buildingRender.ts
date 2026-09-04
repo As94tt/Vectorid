@@ -4,7 +4,7 @@
 
 import { COLORS, isColorDark } from '../constants/colors'
 import { getResource } from '../data/resources'
-import type { LightSource, Mirror, Prism } from '../economy/buildings'
+import { GENERATOR_MAX_LEVEL, PRISM_MAX_LEVEL, CONTAINER_MAX_LEVEL, type Container, type LightSource, type Mirror, type Prism } from '../economy/buildings'
 import type { BeamSegment, PrismStatus } from '../economy/lightSimulation'
 import { cellCenter, GRID_EXPAND_COST, type GridCoord, type HexDirection, type PlacementGrid } from '../grid/placementGrid'
 import { drawCircle, drawCircleOutline, drawHexagon, drawHexagonOutline, drawTriangle, drawTriangleOutline, strokeRoundedPolyline } from './shapes'
@@ -32,6 +32,37 @@ export function drawCellHighlight(ctx: CanvasRenderingContext2D, grid: Placement
   ctx.restore()
 }
 
+/** Persistenter Status-Marker (User-Vorgabe): die Rasterzelle unter einem Gebäude auf Max-Level
+ * färbt sich golden (Füllung + Kontur) statt der normalen Gitterlinie — anders als
+ * `drawCellHighlight()` (kurzlebige Platzierungs-Vorschau) bleibt dieser Marker dauerhaft sichtbar,
+ * solange das Gebäude dort auf Maximal-Level ist. Vor den Gebäuden selbst gezeichnet, damit er wie
+ * ein Hintergrund-Glühen unter der Bau-Grafik wirkt statt sie zu verdecken. */
+export function drawMaxLevelCellMarker(ctx: CanvasRenderingContext2D, grid: PlacementGrid, cell: GridCoord) {
+  const { x, y } = cellCenter(grid, cell)
+  const vertex = (i: number) => {
+    const angle = (Math.PI / 180) * (60 * i - 90)
+    return { x: x + grid.cellSize * Math.cos(angle), y: y + grid.cellSize * Math.sin(angle) }
+  }
+  ctx.save()
+  ctx.beginPath()
+  for (let i = 0; i < 6; i++) {
+    const p = vertex(i)
+    if (i === 0) ctx.moveTo(p.x, p.y)
+    else ctx.lineTo(p.x, p.y)
+  }
+  ctx.closePath()
+  ctx.fillStyle = MAX_LEVEL_COLOR
+  ctx.globalAlpha = 0.16
+  ctx.fill()
+  ctx.globalAlpha = 1
+  ctx.strokeStyle = MAX_LEVEL_COLOR
+  ctx.shadowColor = MAX_LEVEL_COLOR
+  ctx.shadowBlur = 6
+  ctx.lineWidth = 2
+  ctx.stroke()
+  ctx.restore()
+}
+
 export const SOURCE_OUTER_SIZE = 22
 const SOURCE_INNER_SIZE = 10
 const PULSE_PERIOD_SECONDS = 1
@@ -44,13 +75,55 @@ const PORT_DOT_RADIUS = 3.5
 const PORT_DOT_OFFSET = 15
 const OUTPUT_PORT_RADIUS = 5.5
 
-/** Hohler Außenring + gefüllter Innenkreis, der 1x/Sekunde pulsiert — identisch zum früheren Generator. */
+/** Golden — Marker-Farbe für "auf Maximal-Level" (User-Vorgabe), unabhängig von der jeweiligen
+ * Ressourcen-Farbe des Gebäudes, damit sie auf JEDER Farbe klar erkennbar bleibt. */
+export const MAX_LEVEL_COLOR = '#ffd23f'
+
+/** Bautypen mit Leveln skalieren ihre sichtbare Größe linear zwischen diesem Mindest-Anteil der
+ * Basisgröße (Level 1) und 100% (Max-Level, siehe SOURCE_OUTER_SIZE/PRISM_*_SIZE/CONTAINER_SIZE —
+ * die bisherigen Konstanten bleiben unverändert die GRÖSSTE Größe). Untergrenze bewusst nicht zu
+ * klein gewählt, damit ein Level-1-Gebäude weiterhin gut klickbar/lesbar bleibt. */
+const LEVEL_MIN_SIZE_SCALE = 0.55
+
+function levelSizeScale(level: number, maxLevel: number): number {
+  if (maxLevel <= 1) return 1
+  return LEVEL_MIN_SIZE_SCALE + ((level - 1) / (maxLevel - 1)) * (1 - LEVEL_MIN_SIZE_SCALE)
+}
+
+/** Aktuelle (level-abhängige) Radien/Größen — von main.ts auch fürs Hit-Testing und die Level-Up-
+ * Badge-Position genutzt, damit Klickfläche und Badge-Abstand immer zur sichtbaren Größe passen. */
+export function sourceOuterRadius(source: LightSource): number {
+  return SOURCE_OUTER_SIZE * levelSizeScale(source.level, GENERATOR_MAX_LEVEL)
+}
+export function prismSize(prism: Prism): number {
+  const base = prism.prismKind === 'triangle' ? PRISM_SIMPLE_SIZE : PRISM_COMPLEX_SIZE
+  return base * levelSizeScale(prism.level, PRISM_MAX_LEVEL)
+}
+export function containerRadius(container: Container): number {
+  return CONTAINER_SIZE * levelSizeScale(container.level, CONTAINER_MAX_LEVEL)
+}
+
+export function isSourceMaxed(source: LightSource): boolean {
+  return source.level >= GENERATOR_MAX_LEVEL
+}
+export function isPrismMaxed(prism: Prism): boolean {
+  return prism.level >= PRISM_MAX_LEVEL
+}
+export function isContainerMaxed(container: Container): boolean {
+  return container.level >= CONTAINER_MAX_LEVEL
+}
+
+/** Hohler Außenring + gefüllter Innenkreis, der 1x/Sekunde pulsiert — identisch zum früheren Generator.
+ * Größe skaliert mit `source.level` (siehe levelSizeScale/sourceOuterRadius). */
 export function drawLightSourceEntity(ctx: CanvasRenderingContext2D, source: LightSource, center: { x: number; y: number }, elapsedSeconds: number) {
   const color = getResource(source.resourceId).color
-  drawCircleOutline(ctx, center.x, center.y, SOURCE_OUTER_SIZE, color)
+  const scale = levelSizeScale(source.level, GENERATOR_MAX_LEVEL)
+  const outer = SOURCE_OUTER_SIZE * scale
+  const inner = SOURCE_INNER_SIZE * scale
+  drawCircleOutline(ctx, center.x, center.y, outer, color)
   const phase = (elapsedSeconds % PULSE_PERIOD_SECONDS) / PULSE_PERIOD_SECONDS
   const pulse = 0.7 + 0.3 * Math.sin(phase * Math.PI * 2)
-  drawCircle(ctx, center.x, center.y, SOURCE_INNER_SIZE * pulse, color, 14)
+  drawCircle(ctx, center.x, center.y, inner * pulse, color, 14)
 }
 
 /** Eine von 3 möglichen Spiegel-Achsen (0/1/2, siehe MirrorOrientation-Kommentar in
@@ -160,7 +233,7 @@ function triangleRotationForOutput(outputDirection: HexDirection): number {
 export function drawPrismEntity(ctx: CanvasRenderingContext2D, prism: Prism, center: { x: number; y: number }, status: PrismStatus, elapsedSeconds: number) {
   const active = !!status.output
   const color = status.output?.color ?? UNCONFIGURED_COLOR
-  const size = prism.prismKind === 'triangle' ? PRISM_SIMPLE_SIZE : PRISM_COMPLEX_SIZE
+  const size = prismSize(prism)
   const pulse = active ? 0.85 + 0.15 * Math.sin(((elapsedSeconds % PULSE_PERIOD_SECONDS) / PULSE_PERIOD_SECONDS) * Math.PI * 2) : 1
   const glow = active ? 18 * pulse : 8
 
@@ -189,14 +262,15 @@ export function drawPrismEntity(ctx: CanvasRenderingContext2D, prism: Prism, cen
 /** Gefüllter Kreis (User-Vorgabe, ersetzt das frühere Sechseck) — gefüllt mit Tortenstücken in
  * den Farben, die er gerade einfängt (je gleich große Kreissektoren, an der Kreis-Kontur
  * geclippt), statt nur kleiner Farbpunkte daneben. */
-export function drawContainerEntity(ctx: CanvasRenderingContext2D, center: { x: number; y: number }, receivedResourceIds: string[]) {
+export function drawContainerEntity(ctx: CanvasRenderingContext2D, container: Container, center: { x: number; y: number }, receivedResourceIds: string[]) {
   const active = receivedResourceIds.length > 0
   const outlineColor = active ? COLORS.textBright : '#3a3f4a'
+  const size = containerRadius(container)
 
   if (active) {
     ctx.save()
     ctx.beginPath()
-    ctx.arc(center.x, center.y, CONTAINER_SIZE, 0, Math.PI * 2)
+    ctx.arc(center.x, center.y, size, 0, Math.PI * 2)
     ctx.clip()
 
     const anglePerSlice = (Math.PI * 2) / receivedResourceIds.length
@@ -207,7 +281,7 @@ export function drawContainerEntity(ctx: CanvasRenderingContext2D, center: { x: 
       ctx.shadowBlur = 10
       ctx.beginPath()
       ctx.moveTo(center.x, center.y)
-      ctx.arc(center.x, center.y, CONTAINER_SIZE * 1.5, -Math.PI / 2 + i * anglePerSlice, -Math.PI / 2 + (i + 1) * anglePerSlice)
+      ctx.arc(center.x, center.y, size * 1.5, -Math.PI / 2 + i * anglePerSlice, -Math.PI / 2 + (i + 1) * anglePerSlice)
       ctx.closePath()
       ctx.fill()
     })
@@ -220,7 +294,7 @@ export function drawContainerEntity(ctx: CanvasRenderingContext2D, center: { x: 
   ctx.shadowBlur = active ? 14 : 4
   ctx.lineWidth = 2
   ctx.beginPath()
-  ctx.arc(center.x, center.y, CONTAINER_SIZE, 0, Math.PI * 2)
+  ctx.arc(center.x, center.y, size, 0, Math.PI * 2)
   ctx.stroke()
   ctx.restore()
 }

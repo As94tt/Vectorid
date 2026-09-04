@@ -31,7 +31,7 @@ export function buildHudButtons(canvasWidth: number): HudButton[] {
   const order: { id: HudButton['id']; label: string }[] = [
     { id: 'settings', label: 'SETTINGS' },
     { id: 'save', label: 'SAVE' },
-    { id: 'cheat', label: 'CHEAT +10' },
+    { id: 'cheat', label: 'CHEAT +100' },
     { id: 'demolish', label: 'DEMOLISH' },
   ]
   return order.map((o, i) => ({
