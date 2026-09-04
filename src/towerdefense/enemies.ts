@@ -19,10 +19,6 @@ export const STACK_DECAY_PER_SECOND = 1
 export const RED_BURN_MAX_DPS = 5 // bei TIER2_STACK_MAX Stacks
 export const GREEN_POISON_MAX_DPS = 6 // bei TIER2_STACK_MAX Stacks
 
-/** Tier-3-Verstärker (Teal/Purple/Olive): permanent, kein Verfall (User-Tabelle nennt keinen). */
-export const AMPLIFIER_PER_HIT = 0.1 // +10 Prozentpunkte je Treffer
-export const AMPLIFIER_MAX = 1.0 // Deckel bei +100% Bonus-Stacks
-
 /** Cerulean (Freeze) / Violet (Explosion): 0-30, kein Verfall vor Auslösung, danach zurückgesetzt. */
 export const TIER4_LOW_STACK_MAX = 30
 export const CERULEAN_FREEZE_DURATION = 1
@@ -50,6 +46,14 @@ export const BLUE_MAX_SLOW_REDUCTION = 0.5 // bei TIER2_STACK_MAX Blue-Stacks
 export const BLACK_STACK_DURATION = 5
 export const BLACK_THRESHOLD_PER_STACK = 0.001 // 0.1 Prozentpunkte als Bruchteil (0-1)
 
+/** White (Overload) — Gegenstück zu Black: statt einer schleichenden Execute-Schwelle ein
+ * einmaliger Burst aus echtem (rüstungs-/Vulnerability-ignorierendem) Schaden, sobald genug
+ * Stacks erreicht sind, danach Reset. Stacks verfallen wie bei Black gemeinsam nach `WHITE_STACK_
+ * DURATION` Sekunden ohne Treffer. */
+export const WHITE_STACK_DURATION = 5
+export const WHITE_STACK_TRIGGER = 10
+export const WHITE_BURST_FRACTION = 0.08 // 8% der maximalen Lebenspunkte als echter Schaden je Auslösung
+
 export type Tier4StackKey = 'cerulean' | 'violet' | 'fuchsia' | 'amber' | 'chartreuse'
 
 export interface Enemy {
@@ -71,12 +75,6 @@ export interface Enemy {
   redStacks: number
   greenStacks: number
 
-  // Tier 3 — permanente Verstärker für die jeweilige Tier-4-Farbfamilie (Teal=Cyan-Spektrum,
-  // Purple=Magenta-Spektrum, Olive=Yellow-Spektrum), als Bruchteil (0 = kein Bonus, 1 = +100%).
-  tealAmplifier: number
-  purpleAmplifier: number
-  oliveAmplifier: number
-
   // Tier 4
   ceruleanStacks: number // 0-30, Freeze-Trigger
   frozenUntil: number
@@ -88,9 +86,12 @@ export interface Enemy {
    * nicht noch einmal per Aquamarine weiterverbreitet werden (verhindert Kettenreaktionen). */
   aquamarineSpreadBlock: Set<Tier4StackKey>
 
-  // Tier 5 — Black: Stacks verfallen gemeinsam BLACK_STACK_DURATION Sekunden nach dem letzten Treffer.
+  // Tier 5 — Black/White: Stacks verfallen jeweils gemeinsam BLACK_/WHITE_STACK_DURATION
+  // Sekunden nach dem letzten Treffer.
   blackStacks: number
   blackStacksExpireAt: number
+  whiteStacks: number
+  whiteStacksExpireAt: number
 }
 
 let enemyCounter = 0
@@ -107,9 +108,6 @@ export function createEnemy(hp = 30, baseSpeed = 0.09, armor = 0.1): Enemy {
     blueStacks: 0,
     redStacks: 0,
     greenStacks: 0,
-    tealAmplifier: 0,
-    purpleAmplifier: 0,
-    oliveAmplifier: 0,
     ceruleanStacks: 0,
     frozenUntil: 0,
     violetStacks: 0,
@@ -119,6 +117,8 @@ export function createEnemy(hp = 30, baseSpeed = 0.09, armor = 0.1): Enemy {
     aquamarineSpreadBlock: new Set(),
     blackStacks: 0,
     blackStacksExpireAt: 0,
+    whiteStacks: 0,
+    whiteStacksExpireAt: 0,
   }
 }
 
@@ -155,6 +155,7 @@ export function tickEnemy(enemy: Enemy, dt: number, elapsedSeconds: number) {
   if (enemy.amberStacks > 0) dealDamage(enemy, (enemy.amberStacks / TIER4_HIGH_STACK_MAX) * AMBER_MAX_DPS_FRACTION * enemy.maxHp * dt)
 
   if (enemy.blackStacksExpireAt <= elapsedSeconds) enemy.blackStacks = 0
+  if (enemy.whiteStacksExpireAt <= elapsedSeconds) enemy.whiteStacks = 0
 }
 
 /** Für die Statuspunkte-Anzeige (siehe render/combatRender.ts): alle aktuell aktiven Effekte mit
@@ -171,6 +172,7 @@ export function activeStatusEffects(enemy: Enemy, elapsedSeconds: number): { res
   if (enemy.amberStacks > 0) list.push({ resourceId: 'amber', fraction: enemy.amberStacks / TIER4_HIGH_STACK_MAX })
   if (enemy.chartreuseStacks > 0) list.push({ resourceId: 'chartreuse', fraction: enemy.chartreuseStacks / TIER4_HIGH_STACK_MAX })
   if (enemy.blackStacksExpireAt > elapsedSeconds) list.push({ resourceId: 'black', fraction: Math.min(1, enemy.blackStacks / 10) })
+  if (enemy.whiteStacksExpireAt > elapsedSeconds) list.push({ resourceId: 'white', fraction: enemy.whiteStacks / WHITE_STACK_TRIGGER })
   return list
 }
 

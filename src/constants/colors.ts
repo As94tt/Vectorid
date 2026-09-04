@@ -18,6 +18,7 @@ export const COLORS = {
   pathGlow: 'rgba(255, 45, 170, 0.9)',
 
   textDim: '#7d7d87',
+  textMid: '#c7c7d1',
   textBright: '#eafffa',
 } as const
 

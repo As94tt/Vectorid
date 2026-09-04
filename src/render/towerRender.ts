@@ -3,7 +3,7 @@ import { BUILDING_COSTS } from '../economy/buildings'
 import { getResource } from '../data/resources'
 import { GRID_EXPAND_COST } from '../grid/placementGrid'
 import { defaultTowerRotation, getTowerDefinition, TOWER_DEFINITIONS, type PlacedTower, type TowerKind } from '../towerdefense/towers'
-import { drawCircle, drawCircleOutline, drawHalfCircle, drawHexagon, drawPentagon, drawSquare, drawStar, drawTriangle } from './shapes'
+import { drawCircle, drawCircleOutline, drawHalfCircle, drawHexagon, drawHexagonOutline, drawPentagon, drawSquare, drawStar, drawTriangle } from './shapes'
 
 /** Munition noch nicht gewählt -> neutrales Grau statt einer Ressourcenfarbe. */
 export const TOWER_UNSELECTED_COLOR = '#8a8a94'
@@ -98,16 +98,21 @@ export function hitTestTowerPalette(items: TowerPaletteItem[], x: number, y: num
   return items.find((item) => Math.hypot(item.x - x, item.y - y) <= item.radius + 6) ?? null
 }
 
-function drawCrosshairIcon(ctx: CanvasRenderingContext2D, x: number, y: number, radius: number) {
-  ctx.strokeStyle = COLORS.textBright
-  ctx.lineWidth = 2
-  ctx.beginPath()
-  ctx.moveTo(x - radius, y)
-  ctx.lineTo(x + radius, y)
-  ctx.moveTo(x, y - radius)
-  ctx.lineTo(x, y + radius)
-  ctx.stroke()
-  ctx.strokeRect(x - radius - 6, y - radius - 6, radius * 2 + 12, radius * 2 + 12)
+/** Kurzbeschreibung fürs Hover-Tooltip über einem Kauf-Leisten-Icon (main.ts) — Name + Zweck,
+ * für Turm- UND Info-Icons. Turmtypen nutzen ihre eigene TOWER_DEFINITIONS-Beschreibung. */
+export function towerPaletteItemDescription(kind: TowerPaletteKind): string {
+  switch (kind) {
+    case 'mirror':
+      return 'Mirror — redirects the enemy path without changing it otherwise'
+    case 'expand-grid':
+      return 'Expand the Defense grid by one row and column'
+    case 'tower-info':
+      return 'Towers — shows every tower type with its stats'
+    case 'ammo-info':
+      return 'Ammo — shows every color and its combat effect'
+    default:
+      return getTowerDefinition(kind).description
+  }
 }
 
 /** Kleine "alle Formen"-Miniatur fürs Türme-Info-Icon: deutet an, dass dahinter eine
@@ -151,7 +156,7 @@ export function drawTowerPaletteItem(ctx: CanvasRenderingContext2D, item: TowerP
   ctx.globalAlpha = affordable ? 1 : 0.35
 
   if (item.kind === 'mirror') drawMirrorPaletteIcon(ctx, item.x, item.y, item.radius)
-  else if (item.kind === 'expand-grid') drawCrosshairIcon(ctx, item.x, item.y, item.radius)
+  else if (item.kind === 'expand-grid') drawHexagonOutline(ctx, item.x, item.y, item.radius, COLORS.gridLineStrong, 2)
   else if (item.kind === 'tower-info') drawTowerInfoIcon(ctx, item.x, item.y, item.radius)
   else if (item.kind === 'ammo-info') drawAmmoInfoIcon(ctx, item.x, item.y, item.radius)
   else drawTowerShape(ctx, item.kind, item.x, item.y, item.radius, TOWER_UNSELECTED_COLOR, defaultTowerRotation(item.kind))

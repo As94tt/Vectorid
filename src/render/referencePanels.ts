@@ -64,8 +64,8 @@ function drawPanelChrome(ctx: CanvasRenderingContext2D, width: number, height: n
   ctx.font = 'bold 16px monospace'
   ctx.fillText(title, bounds.x + bounds.width / 2, bounds.y + 34)
   if (subtitle) {
-    ctx.fillStyle = COLORS.textDim
-    ctx.font = '10px monospace'
+    ctx.fillStyle = COLORS.textMid
+    ctx.font = '11px monospace'
     ctx.fillText(subtitle, bounds.x + bounds.width / 2, bounds.y + 50)
   }
   ctx.restore()
@@ -144,16 +144,16 @@ export function drawTowerReferencePanel(ctx: CanvasRenderingContext2D, width: nu
     ctx.font = 'bold 13px monospace'
     ctx.fillText(def.name, textX, cellY + 16)
 
-    ctx.fillStyle = COLORS.textDim
-    ctx.font = '10px monospace'
+    ctx.fillStyle = COLORS.textMid
+    ctx.font = '12px monospace'
     const descLines = wrapLines(ctx, def.description, textW, 2)
-    descLines.forEach((line, li) => ctx.fillText(line, textX, cellY + 32 + li * 12))
+    descLines.forEach((line, li) => ctx.fillText(line, textX, cellY + 34 + li * 13))
 
     const attackSpeed = (1 / def.fireInterval).toFixed(2)
     const projectile = def.projectileSpeed ? `${def.projectileSpeed}px/s` : '—'
-    ctx.fillStyle = COLORS.textDim
-    ctx.font = '9px monospace'
-    ctx.fillText(`Damage ${def.damage}  ·  Range ${def.range}px`, textX, cellY + cellH - 22)
+    ctx.fillStyle = COLORS.textMid
+    ctx.font = '10px monospace'
+    ctx.fillText(`Damage ${def.damage}  ·  Range ${def.range}px  ·  Consumption ${def.consumption}/s`, textX, cellY + cellH - 22)
     ctx.fillText(`Rate ${attackSpeed}/s  ·  Projectile ${projectile}`, textX, cellY + cellH - 10)
     ctx.restore()
   })
@@ -192,10 +192,10 @@ export function drawAmmoReferencePanel(ctx: CanvasRenderingContext2D, width: num
     ctx.font = 'bold 11px monospace'
     ctx.fillText(`${resource.name} — ${effect.name}`, nameX, cellY + 21)
 
-    ctx.fillStyle = COLORS.textDim
-    ctx.font = '9px monospace'
+    ctx.fillStyle = COLORS.textMid
+    ctx.font = '11px monospace'
     const lines = wrapLines(ctx, effect.description, textW, 2)
-    lines.forEach((line, li) => ctx.fillText(line, cellX + 4, cellY + 38 + li * 11))
+    lines.forEach((line, li) => ctx.fillText(line, cellX + 4, cellY + 38 + li * 13))
     ctx.restore()
   })
 }

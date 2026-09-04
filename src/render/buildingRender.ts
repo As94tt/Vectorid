@@ -7,7 +7,7 @@ import { getResource } from '../data/resources'
 import type { LightSource, Mirror, Prism } from '../economy/buildings'
 import type { BeamSegment, PrismStatus } from '../economy/lightSimulation'
 import { cellCenter, GRID_EXPAND_COST, type GridCoord, type HexDirection, type PlacementGrid } from '../grid/placementGrid'
-import { drawCircle, drawCircleOutline, drawHexagon, drawPentagon, drawTriangle, getPolygonVertices, strokeRoundedPolyline } from './shapes'
+import { drawCircle, drawCircleOutline, drawHexagon, drawHexagonOutline, drawTriangle, strokeRoundedPolyline } from './shapes'
 
 /** Pixel-Winkel (Grad) der 6 Hex-Richtungen — deckungsgleich mit den Nachbar-Deltas in
  * grid/placementGrid.ts (gerade Zeile), fürs Platzieren von Anschluss-Punkten/Spiegel-Linien. */
@@ -77,9 +77,12 @@ export function drawMirrorEntity(ctx: CanvasRenderingContext2D, mirror: Mirror, 
   ctx.restore()
 }
 
-/** 5 kleine Anschluss-Punkte an den Rasterkanten der Zelle (alle 6 Richtungen außer der
- * dedizierten Output-Richtung, siehe unten) — gefüllt in der Farbe eines gerade ankommenden
- * Strahls, sonst hohl/grau ("fehlender Input" bleibt sichtbar). */
+/** Kleine Anschluss-Punkte an den Rasterkanten der Zelle — beim Hexagon-Prisma alle 6 Richtungen
+ * außer der dedizierten Output-Richtung (unverändert), beim Dreieck-Prisma NUR die 3 eckengenauen
+ * Richtungen (`onlyDirections`, siehe lightSimulation.ts `isTriangleInputSide()`) — die 3
+ * "Seiten"-Richtungen bekommen gar keinen Punkt, weil dort ohnehin nie ein Eingang möglich ist.
+ * Gefüllt in der Farbe eines gerade ankommenden Strahls, sonst hohl/grau ("fehlender Input"
+ * bleibt sichtbar). */
 function drawPrismPorts(
   ctx: CanvasRenderingContext2D,
   center: { x: number; y: number },
@@ -87,8 +90,10 @@ function drawPrismPorts(
   outputDirection: HexDirection,
   outputColor: string,
   outputActive: boolean,
+  onlyDirections?: HexDirection[],
 ) {
-  for (const dir of [0, 1, 2, 3, 4, 5] as HexDirection[]) {
+  const directions = onlyDirections ?? ([0, 1, 2, 3, 4, 5] as HexDirection[])
+  for (const dir of directions) {
     const angle = (Math.PI / 180) * HEX_DIRECTION_ANGLE_DEG[dir]
     const x = center.x + PORT_DOT_OFFSET * Math.cos(angle)
     const y = center.y + PORT_DOT_OFFSET * Math.sin(angle)
@@ -140,6 +145,16 @@ function drawPrismPorts(
  * Pulsiert sanft, solange aktiv. Der Ring um den Output-Port (siehe drawPrismPorts()) zeigt, in
  * welche der 6 Richtungen das Prisma seine Ausgabe gerade abstrahlt — per Klick drehbar wie ein
  * Spiegel (`rotatePrism()` in economy/buildings.ts). */
+/** Dreht das Dreieck so, dass seine 3 Ecken exakt auf `outputDirection` und dessen beiden
+ * eckengenauen Nachbarn (±2, siehe lightSimulation.ts `isTriangleInputSide()`) zeigen — hergeleitet
+ * aus HEX_DIRECTION_ANGLE_DEG (Pixel-Winkel je Richtung) und getPolygonVertices()' Konvention
+ * (Ecke 0 liegt bei `rotation - 90°`): `rotation = HEX_DIRECTION_ANGLE_DEG[outputDirection] + 90°`
+ * legt Ecke 0 exakt auf die Output-Richtung, die beiden anderen Ecken (je 120°/240° versetzt)
+ * fallen dank der 60°-Hex-Winkel automatisch auf outputDirection±2. */
+function triangleRotationForOutput(outputDirection: HexDirection): number {
+  return (Math.PI / 180) * (HEX_DIRECTION_ANGLE_DEG[outputDirection] + 90)
+}
+
 export function drawPrismEntity(ctx: CanvasRenderingContext2D, prism: Prism, center: { x: number; y: number }, status: PrismStatus, elapsedSeconds: number) {
   const active = !!status.output
   const color = status.output?.color ?? UNCONFIGURED_COLOR
@@ -147,14 +162,18 @@ export function drawPrismEntity(ctx: CanvasRenderingContext2D, prism: Prism, cen
   const pulse = active ? 0.85 + 0.15 * Math.sin(((elapsedSeconds % PULSE_PERIOD_SECONDS) / PULSE_PERIOD_SECONDS) * Math.PI * 2) : 1
   const glow = active ? 18 * pulse : 8
 
-  if (prism.prismKind === 'triangle') drawTriangle(ctx, center.x, center.y, size, color, 0, glow)
-  else drawPentagon(ctx, center.x, center.y, size, color, 0, glow)
-
-  drawPrismPorts(ctx, center, status.sides, prism.outputDirection, color, active)
+  if (prism.prismKind === 'triangle') {
+    drawTriangle(ctx, center.x, center.y, size, color, triangleRotationForOutput(prism.outputDirection), glow)
+    const corners: HexDirection[] = [prism.outputDirection, ((prism.outputDirection + 2) % 6) as HexDirection, ((prism.outputDirection + 4) % 6) as HexDirection]
+    drawPrismPorts(ctx, center, status.sides, prism.outputDirection, color, active, corners)
+  } else {
+    drawHexagon(ctx, center.x, center.y, size, color, 0, glow)
+    drawPrismPorts(ctx, center, status.sides, prism.outputDirection, color, active)
+  }
 }
 
-/** Sechseck (User-Vorgabe) statt des früheren Rechtecks — gefüllt mit Tortenstücken in den
- * Farben, die es gerade einfängt (je gleich große Kreissektoren, an der Sechseck-Kontur
+/** Gefüllter Kreis (User-Vorgabe, ersetzt das frühere Sechseck) — gefüllt mit Tortenstücken in
+ * den Farben, die er gerade einfängt (je gleich große Kreissektoren, an der Kreis-Kontur
  * geclippt), statt nur kleiner Farbpunkte daneben. */
 export function drawContainerEntity(ctx: CanvasRenderingContext2D, center: { x: number; y: number }, receivedResourceIds: string[]) {
   const active = receivedResourceIds.length > 0
@@ -162,10 +181,8 @@ export function drawContainerEntity(ctx: CanvasRenderingContext2D, center: { x: 
 
   if (active) {
     ctx.save()
-    const clipPoints = getPolygonVertices(center.x, center.y, CONTAINER_SIZE, 6, 0)
     ctx.beginPath()
-    clipPoints.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)))
-    ctx.closePath()
+    ctx.arc(center.x, center.y, CONTAINER_SIZE, 0, Math.PI * 2)
     ctx.clip()
 
     const anglePerSlice = (Math.PI * 2) / receivedResourceIds.length
@@ -188,10 +205,8 @@ export function drawContainerEntity(ctx: CanvasRenderingContext2D, center: { x: 
   ctx.shadowColor = outlineColor
   ctx.shadowBlur = active ? 14 : 4
   ctx.lineWidth = 2
-  const outlinePoints = getPolygonVertices(center.x, center.y, CONTAINER_SIZE, 6, 0)
   ctx.beginPath()
-  outlinePoints.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)))
-  ctx.closePath()
+  ctx.arc(center.x, center.y, CONTAINER_SIZE, 0, Math.PI * 2)
   ctx.stroke()
   ctx.restore()
 }
@@ -291,6 +306,29 @@ export function hitTestPalette(items: PaletteItem[], x: number, y: number): Pale
   return items.find((item) => Math.hypot(item.x - x, item.y - y) <= item.radius + 6) ?? null
 }
 
+/** Kurzbeschreibung fürs Hover-Tooltip über einem Kauf-Leisten-Icon (main.ts) — Name + Zweck,
+ * für Produktions- UND Info-Icons. */
+export function paletteItemDescription(kind: PaletteKind): string {
+  switch (kind) {
+    case 'source-cyan':
+    case 'source-magenta':
+    case 'source-yellow':
+      return 'Generator — produces a raw color at a fixed rate, beams it into all 6 directions'
+    case 'mirror':
+      return 'Mirror — redirects a beam without changing its color or rate'
+    case 'prism-simple':
+      return 'Triangle Prism — mixes 2 named colors arriving at its corners into a new one'
+    case 'prism-complex':
+      return 'Hexagon Prism — mixes raw Cyan/Magenta/Yellow parts (or 3 named colors) into a new one'
+    case 'container':
+      return 'Container — stores rate from up to N different colors, based on its level'
+    case 'expand-grid':
+      return 'Expand the Economy grid by one row and column'
+    case 'color-wheel':
+      return 'Color Wheel — shows every color and how it is mixed'
+  }
+}
+
 export function drawPaletteItem(ctx: CanvasRenderingContext2D, item: PaletteItem, affordable: boolean) {
   ctx.save()
   ctx.globalAlpha = affordable ? 1 : 0.35
@@ -321,21 +359,13 @@ export function drawPaletteItem(ctx: CanvasRenderingContext2D, item: PaletteItem
       drawTriangle(ctx, item.x, item.y, item.radius, UNCONFIGURED_COLOR, 0, 8)
       break
     case 'prism-complex':
-      drawPentagon(ctx, item.x, item.y, item.radius, UNCONFIGURED_COLOR, 0, 8)
+      drawHexagon(ctx, item.x, item.y, item.radius, UNCONFIGURED_COLOR, 0, 8)
       break
     case 'container':
-      drawHexagon(ctx, item.x, item.y, item.radius * 0.85, COLORS.textBright, 0, 6)
+      drawCircle(ctx, item.x, item.y, item.radius * 0.85, COLORS.textBright, 6)
       break
     case 'expand-grid':
-      ctx.strokeStyle = COLORS.textBright
-      ctx.lineWidth = 2
-      ctx.beginPath()
-      ctx.moveTo(item.x - item.radius, item.y)
-      ctx.lineTo(item.x + item.radius, item.y)
-      ctx.moveTo(item.x, item.y - item.radius)
-      ctx.lineTo(item.x, item.y + item.radius)
-      ctx.stroke()
-      ctx.strokeRect(item.x - item.radius - 6, item.y - item.radius - 6, item.radius * 2 + 12, item.radius * 2 + 12)
+      drawHexagonOutline(ctx, item.x, item.y, item.radius, COLORS.gridLineStrong, 2)
       break
     case 'color-wheel': {
       drawCircleOutline(ctx, item.x, item.y, item.radius, COLORS.textBright, 1.5, 6)

@@ -2,12 +2,21 @@ import { COLORS } from './constants/colors'
 import { startGameLoop } from './core/gameLoop'
 import {
   BUILDING_COSTS,
+  CONTAINER_MAX_LEVEL,
+  containerUpgradeCost,
   createContainer,
   createLightSource,
   createMirror,
   createPrism,
+  GENERATOR_MAX_LEVEL,
+  generatorUpgradeCost,
+  PRISM_MAX_LEVEL,
+  prismUpgradeCost,
   rotateMirror,
   rotatePrism,
+  upgradeContainer,
+  upgradeLightSource,
+  upgradePrism,
   type Container,
   type LightSource,
   type Mirror,
@@ -43,6 +52,7 @@ import {
   drawPaletteItem,
   drawPrismEntity,
   hitTestPalette,
+  paletteItemDescription,
   sourceResourceIdForPalette,
   CONTAINER_SIZE,
   PRISM_COMPLEX_SIZE,
@@ -52,17 +62,18 @@ import {
   type PaletteKind,
 } from './render/buildingRender'
 import { buildHudButtons, drawHud, hitTestButton, HUD_HEIGHT, type HudButton } from './render/hud'
-import { buildWheelLayout, drawColorWheelPanel, hitTestWheelClose, hitTestWheelSwatch, type WheelSwatch } from './render/colorWheelPanel'
+import { buildWheelLayout, drawColorWheelPanel, drawLabel, hitTestWheelClose, hitTestWheelSwatch, type WheelSwatch } from './render/colorWheelPanel'
 import {
   buildTowerPalette,
   drawTowerEntity,
   drawTowerPaletteItem,
   drawTowerPreview,
   hitTestTowerPalette,
+  towerPaletteItemDescription,
   TOWER_ICON_SIZE,
   type TowerPaletteItem,
 } from './render/towerRender'
-import { createTower, getTowerDefinition, type PlacedTower, type TowerKind } from './towerdefense/towers'
+import { getEffectiveTowerStats, createTower, getTowerDefinition, towerUpgradeCost, TOWER_MAX_LEVEL, type PlacedTower, type TowerKind } from './towerdefense/towers'
 import { getResource, RESOURCES } from './data/resources'
 import { drawHexagon } from './render/shapes'
 import { drawPath, type Point } from './towerdefense/path'
@@ -110,7 +121,9 @@ interface InfoPanelRow {
   value: string
   y: number
   height: number
-  clickable?: boolean
+  /** 'ammo' öffnet das Farbwheel im Munitions-Modus, 'level' versucht ein Level-Up (siehe
+   * attemptLevelUp() weiter unten) — beides über denselben klickbaren-Zeile-Mechanismus. */
+  action?: 'ammo' | 'level'
 }
 interface InfoPanelLayout {
   x: number
@@ -204,7 +217,7 @@ function buildDemoEconomy() {
   // per Spiegel verdrahten kann.
   lightSources = [createLightSource(0, 3, 'cyan'), createLightSource(1, 3, 'magenta'), createLightSource(2, 3, 'yellow')]
   mirrors = []
-  prisms = [createPrism(3, 0, 'triangle'), createPrism(0, 0, 'pentagon')]
+  prisms = [createPrism(3, 0, 'triangle'), createPrism(0, 0, 'hexagon')]
   containers = [createContainer(0, 2)]
   rebuildOccupancy()
   buildingsReady = true
@@ -358,6 +371,42 @@ function hitTestEconomyBuilding(x: number, y: number): EconomyHit | null {
   return null
 }
 
+const PRISM_LEVEL_BADGE_RADIUS = 10
+
+function prismLevelBadgeCenter(prism: Prism): Point {
+  const center = buildingCenter(prism)
+  const size = prism.prismKind === 'triangle' ? PRISM_SIMPLE_SIZE : PRISM_COMPLEX_SIZE
+  return { x: center.x, y: center.y + size + 14 }
+}
+
+/** Kleiner "Lv.N"-Badge unterhalb jedes Prismas, eigens hit-getestet (siehe attemptPrismLevelUp())
+ * — bewusst NICHT Teil von hitTestEconomyBuilding(), damit ein Klick aufs Prisma selbst weiterhin
+ * nur dreht (siehe pendingPress-Logik), ohne mit dem Level-Up in Konflikt zu geraten. */
+function hitTestPrismLevelBadge(x: number, y: number): Prism | null {
+  for (const prism of prisms) {
+    const badge = prismLevelBadgeCenter(prism)
+    if (Math.hypot(badge.x - x, badge.y - y) <= PRISM_LEVEL_BADGE_RADIUS) return prism
+  }
+  return null
+}
+
+function drawPrismLevelBadge(prism: Prism) {
+  const { x, y } = prismLevelBadgeCenter(prism)
+  const maxed = prism.level >= PRISM_MAX_LEVEL
+  ctx!.save()
+  ctx!.textAlign = 'center'
+  ctx!.font = '10px monospace'
+  if (maxed) {
+    ctx!.fillStyle = COLORS.textMid
+    ctx!.fillText(`Lv.${prism.level}`, x, y)
+  } else {
+    const cost = prismUpgradeCost(prism.prismKind, prism.level + 1)
+    ctx!.fillStyle = canAfford(inventory, 'lumen', cost) ? COLORS.textBright : COLORS.textMid
+    ctx!.fillText(`Lv.${prism.level} ▲${cost}`, x, y)
+  }
+  ctx!.restore()
+}
+
 function towerCenter(tower: PlacedTower) {
   return cellCenter(defenseGrid, { col: tower.col, row: tower.row })
 }
@@ -401,6 +450,49 @@ function demolishEconomyBuilding(hit: EconomyHit) {
   if (infoTarget && infoTarget.id === hit.id) infoTarget = null
 }
 
+/** Levelt das Gebäude/den Turm hinter `target` um 1 hoch, sofern noch nicht maximal und die
+ * Lumen-Kosten (siehe economy/buildings.ts generatorUpgradeCost()/containerUpgradeCost()/
+ * towerdefense/towers.ts towerUpgradeCost()) bezahlt werden können — ausgelöst durch Klick auf
+ * die "Level"-Zeile im Info-Panel (siehe pointerdown). Prismen haben kein Info-Panel (Klick dreht
+ * sie stattdessen, siehe pendingPress-Logik) und werden daher separat geleveled, siehe
+ * `attemptPrismLevelUp()`. */
+function attemptLevelUp(target: InfoTarget) {
+  if (target.kind === 'source') {
+    const source = lightSources.find((s) => s.id === target.id)
+    if (!source || source.level >= GENERATOR_MAX_LEVEL) return
+    const cost = generatorUpgradeCost(source.level + 1)
+    if (!canAfford(inventory, 'lumen', cost)) return
+    spend(inventory, 'lumen', cost)
+    upgradeLightSource(source)
+  } else if (target.kind === 'container') {
+    const container = containers.find((c) => c.id === target.id)
+    if (!container || container.level >= CONTAINER_MAX_LEVEL) return
+    const cost = containerUpgradeCost(container.level + 1)
+    if (!canAfford(inventory, 'lumen', cost)) return
+    spend(inventory, 'lumen', cost)
+    upgradeContainer(container)
+  } else {
+    const tower = towers.find((t) => t.id === target.id)
+    if (!tower || tower.level >= TOWER_MAX_LEVEL) return
+    const cost = towerUpgradeCost(getTowerDefinition(tower.kind), tower.level + 1)
+    if (!canAfford(inventory, 'lumen', cost)) return
+    spend(inventory, 'lumen', cost)
+    tower.level += 1
+  }
+}
+
+/** Prismen haben kein Info-Panel (Klick dreht sie, siehe pendingPress-Logik unten) — Level-Up
+ * läuft daher über einen kleinen, separat hit-getesteten Badge neben dem Prisma (siehe
+ * `hitTestPrismLevelBadge()`/`drawPrismLevelBadge()`), nicht über eine Panel-Zeile wie bei den
+ * übrigen 3 levelbaren Bautypen. */
+function attemptPrismLevelUp(prism: Prism) {
+  if (prism.level >= PRISM_MAX_LEVEL) return
+  const cost = prismUpgradeCost(prism.prismKind, prism.level + 1)
+  if (!canAfford(inventory, 'lumen', cost)) return
+  spend(inventory, 'lumen', cost)
+  upgradePrism(prism)
+}
+
 /** Löscht einen Turm und erstattet seinen Lumen-Baukosten zurück (User-Wunsch). */
 function demolishTower(tower: PlacedTower) {
   towers = towers.filter((t) => t.id !== tower.id)
@@ -421,6 +513,8 @@ function demolishDefenseMirror(mirror: Mirror) {
 
 let placingNewKind: PaletteKind | null = null
 let placingCursor: Point | null = null
+let hoveredEconomyItem: PaletteItem | null = null
+let hoveredTowerItem: TowerPaletteItem | null = null
 let movingBuildingId: string | null = null
 let movingKind: 'source' | 'mirror' | 'prism' | 'container' | 'tower' | 'defense-mirror' | 'spawn' | null = null
 let movingCursor: Point | null = null
@@ -491,11 +585,15 @@ canvas.addEventListener('pointerdown', (e) => {
       infoTarget = null
       return
     }
-    const clickedRow = rows.find((r) => r.clickable && pos.x >= x && pos.x <= x + w && pos.y >= r.y && pos.y <= r.y + r.height)
-    if (clickedRow && infoTarget.kind === 'tower') {
+    const clickedRow = rows.find((r) => r.action && pos.x >= x && pos.x <= x + w && pos.y >= r.y && pos.y <= r.y + r.height)
+    if (clickedRow?.action === 'ammo' && infoTarget.kind === 'tower') {
       ammoTargetTowerId = infoTarget.id
       wheelMode = 'ammo'
       infoTarget = null
+      return
+    }
+    if (clickedRow?.action === 'level') {
+      attemptLevelUp(infoTarget)
       return
     }
     const insidePanel = pos.x >= x && pos.x <= x + w && pos.y >= y && pos.y <= y + h
@@ -565,6 +663,14 @@ canvas.addEventListener('pointerdown', (e) => {
     return
   }
 
+  if (!demolishMode) {
+    const badgePrism = hitTestPrismLevelBadge(pos.x, pos.y)
+    if (badgePrism) {
+      attemptPrismLevelUp(badgePrism)
+      return
+    }
+  }
+
   const economyHit = hitTestEconomyBuilding(pos.x, pos.y)
   if (economyHit) {
     if (demolishMode) {
@@ -583,6 +689,9 @@ canvas.addEventListener('pointermove', (e) => {
   }
   if (infoTarget) return
   if (defenseInfoMode !== 'closed') return
+
+  hoveredEconomyItem = hitTestPalette(paletteItems, pos.x, pos.y)
+  hoveredTowerItem = hitTestTowerPalette(towerPaletteItems, pos.x, pos.y)
 
   if (pendingPress) {
     const dist = Math.hypot(pos.x - pendingPress.downPos.x, pos.y - pendingPress.downPos.y)
@@ -614,7 +723,7 @@ function finalizePlacement(pos: Point) {
     const cost = kind === 'prism-simple' ? BUILDING_COSTS.prismSimple : BUILDING_COSTS.prismComplex
     if (!canAfford(inventory, 'lumen', cost)) return
     spend(inventory, 'lumen', cost)
-    prisms.push(createPrism(cell.col, cell.row, kind === 'prism-simple' ? 'triangle' : 'pentagon'))
+    prisms.push(createPrism(cell.col, cell.row, kind === 'prism-simple' ? 'triangle' : 'hexagon'))
   } else if (kind === 'container') {
     if (!canAfford(inventory, 'lumen', BUILDING_COSTS.container)) return
     spend(inventory, 'lumen', BUILDING_COSTS.container)
@@ -805,6 +914,27 @@ function drawTowerPalette() {
   }
 }
 
+const TOWER_PALETTE_EXTRA_KINDS = new Set(['mirror', 'expand-grid', 'tower-info', 'ammo-info'])
+
+/** Hover-Tooltip über einem Kauf-Leisten-Icon (Economy ODER Defense) — Name + kurzer Zweck,
+ * siehe paletteItemDescription()/towerPaletteItemDescription(). Nutzt denselben Chip-Look wie das
+ * Farbwheel-Panel (drawLabel(), von dort exportiert). */
+function drawPaletteTooltips() {
+  // Sobald ein Modal offen ist, aktualisiert pointermove hoveredEconomyItem/hoveredTowerItem
+  // nicht mehr (siehe early returns dort) — ohne diese Sperre würde sonst ein stehen gebliebenes
+  // Tooltip vom Icon-Klick, der das Modal gerade erst geöffnet hat, sichtbar bleiben.
+  if (wheelMode !== 'closed' || infoTarget || defenseInfoMode !== 'closed') return
+  if (hoveredEconomyItem) {
+    const item = hoveredEconomyItem
+    drawLabel(ctx!, paletteItemDescription(item.kind), item.x, item.y - item.radius - 14, '11px monospace', COLORS.textBright, 15)
+  }
+  if (hoveredTowerItem) {
+    const item = hoveredTowerItem
+    const text = TOWER_PALETTE_EXTRA_KINDS.has(item.kind) ? towerPaletteItemDescription(item.kind) : `${item.name} — ${towerPaletteItemDescription(item.kind)}`
+    drawLabel(ctx!, text, item.x, item.y - item.radius - 14, '11px monospace', COLORS.textBright, 15)
+  }
+}
+
 function drawTowerPlacementPreview() {
   if (!placingTowerKind || !placingTowerCursor) return
   const cell = nearestCell(defenseGrid, placingTowerCursor.x, placingTowerCursor.y)
@@ -871,7 +1001,7 @@ function drawInfoPanel() {
   }
 
   let anchor: Point
-  let rowsInput: { label: string; value: string; clickable?: boolean }[]
+  let rowsInput: { label: string; value: string; action?: 'ammo' | 'level' }[]
 
   if (infoTarget.kind === 'source') {
     const source = lightSources.find((s) => s.id === infoTarget!.id)
@@ -881,10 +1011,11 @@ function drawInfoPanel() {
     }
     anchor = buildingCenter(source)
     const active = lightSimulation.activeSourceIds.has(source.id)
+    const maxed = source.level >= GENERATOR_MAX_LEVEL
     rowsInput = [
       { label: 'Name', value: 'Light Source' },
       { label: 'Color', value: getResource(source.resourceId).name },
-      { label: 'Level', value: '1' },
+      { label: 'Level', value: maxed ? `${source.level}/${GENERATOR_MAX_LEVEL} (max)` : `${source.level}/${GENERATOR_MAX_LEVEL} (Lv.${source.level + 1}: ${generatorUpgradeCost(source.level + 1)} lumen)`, action: maxed ? undefined : 'level' },
       { label: 'Range', value: `${source.range} cells` },
       { label: 'Rate', value: active ? `${source.baseRate.toFixed(1)}/s` : '0.0/s (no container)' },
     ]
@@ -899,7 +1030,12 @@ function drawInfoPanel() {
     const rateRows = rates
       ? [...rates].map(([resourceId, rate]) => ({ label: getResource(resourceId).name, value: `${rate.toFixed(1)}/s` }))
       : [{ label: 'Receiving', value: '—' }]
-    rowsInput = [{ label: 'Name', value: 'Container' }, { label: 'Level', value: '1' }, ...rateRows]
+    const maxed = container.level >= CONTAINER_MAX_LEVEL
+    rowsInput = [
+      { label: 'Name', value: 'Container' },
+      { label: 'Level', value: maxed ? `${container.level}/${CONTAINER_MAX_LEVEL} (max)` : `${container.level}/${CONTAINER_MAX_LEVEL} (Lv.${container.level + 1}: ${containerUpgradeCost(container.level + 1)} lumen)`, action: maxed ? undefined : 'level' },
+      ...rateRows,
+    ]
   } else {
     const tower = towers.find((t) => t.id === infoTarget!.id)
     if (!tower) {
@@ -908,15 +1044,18 @@ function drawInfoPanel() {
     }
     anchor = towerCenter(tower)
     const def = getTowerDefinition(tower.kind)
+    const stats = getEffectiveTowerStats(tower)
     const ammoLabel = tower.resourceId ? getResource(tower.resourceId).name : '— (choose)'
+    const maxed = tower.level >= TOWER_MAX_LEVEL
     rowsInput = [
       { label: 'Name', value: def.name },
-      { label: 'Ammo', value: hasAmmoAvailable(tower) ? ammoLabel : `${ammoLabel} (Shortage!)`, clickable: true },
-      { label: 'Level', value: '1' },
-      { label: 'Damage', value: `${def.damage}` },
-      { label: 'Range', value: `${def.range}px` },
-      { label: 'Attack Speed', value: `${(1 / def.fireInterval).toFixed(2)}/s` },
-      { label: 'Projectile Speed', value: def.projectileSpeed ? `${def.projectileSpeed}px/s` : '—' },
+      { label: 'Ammo', value: hasAmmoAvailable(tower) ? ammoLabel : `${ammoLabel} (Shortage!)`, action: 'ammo' },
+      { label: 'Level', value: maxed ? `${tower.level}/${TOWER_MAX_LEVEL} (max)` : `${tower.level}/${TOWER_MAX_LEVEL} (next: ${towerUpgradeCost(def, tower.level + 1)} lumen)`, action: maxed ? undefined : 'level' },
+      { label: 'Damage', value: stats.damage.toFixed(1) },
+      { label: 'Range', value: `${stats.range.toFixed(0)}px` },
+      { label: 'Attack Speed', value: `${(1 / stats.fireInterval).toFixed(2)}/s` },
+      { label: 'Projectile Speed', value: stats.projectileSpeed ? `${stats.projectileSpeed.toFixed(0)}px/s` : '—' },
+      { label: 'Consumption', value: `${stats.consumption.toFixed(1)}/s` },
     ]
   }
 
@@ -966,7 +1105,7 @@ function drawInfoPanel() {
     ctx!.fillStyle = COLORS.textBright
     ctx!.textAlign = 'right'
     ctx!.fillText(row.value, panelX + panelWidth - padding - 22, midY)
-    if (row.clickable) {
+    if (row.action) {
       ctx!.strokeStyle = COLORS.gridLine
       ctx!.beginPath()
       ctx!.moveTo(panelX + padding, row.y + row.height)
@@ -1031,7 +1170,7 @@ function drawPaletteGhost(kind: PaletteKind, pos: Point) {
     ctx!.stroke()
   } else if (kind === 'prism-simple' || kind === 'prism-complex') {
     const size = kind === 'prism-simple' ? PRISM_SIMPLE_SIZE : PRISM_COMPLEX_SIZE
-    const sides = kind === 'prism-simple' ? 3 : 5
+    const sides = kind === 'prism-simple' ? 3 : 6
     ctx!.strokeStyle = '#ffffff'
     ctx!.lineWidth = 2
     ctx!.beginPath()
@@ -1167,6 +1306,7 @@ function drawBuildings() {
   for (const prism of prisms) {
     const status = lightSimulation.prismStatus.get(prism.id)
     if (status) drawPrismEntity(ctx!, prism, buildingCenter(prism), status, elapsedSeconds)
+    drawPrismLevelBadge(prism)
   }
   for (const container of containers) {
     const rates = lightSimulation.containerRates.get(container.id)
@@ -1176,31 +1316,31 @@ function drawBuildings() {
 
 let elapsedSeconds = 0
 
-/** Platzhalter-Balancing: ein zugewiesener Munitionstyp zieht 1 Einheit/Sekunde von der
- * Netto-Rate der gewählten Ressource ab (genau wie eine Producer-Verbindung einen Generator). */
-const TOWER_AMMO_DRAIN = 1
-
 /** Aktuelle Netto-Produktionsrate (Einheiten/Sekunde) je Ressource: die "Brutto"-Rate aus der
- * Licht-Simulation (siehe recomputeLightSimulation()) abzüglich Turm-Munitions-Drain.
- * `excludeTowerId` blendet einen Turm aus der Drain-Berechnung aus (z. B. den, dessen Munition
- * gerade neu gewählt wird — sonst würde er sich durch seine eigene aktuelle Wahl selbst blockieren). */
+ * Licht-Simulation (siehe recomputeLightSimulation()) abzüglich der `consumption` jedes Turms mit
+ * zugewiesener Munition (siehe towerdefense/towers.ts getEffectiveTowerStats() — ersetzt den
+ * früheren globalen TOWER_AMMO_DRAIN durch einen echten Per-Turm-Wert). `excludeTowerId` blendet
+ * einen Turm aus der Drain-Berechnung aus (z. B. den, dessen Munition gerade neu gewählt wird —
+ * sonst würde er sich durch seine eigene aktuelle Wahl selbst blockieren). */
 function computeResourceRates(excludeTowerId?: string): Map<string, number> {
   const rates = new Map(lightSimulation.totalRates)
   for (const tower of towers) {
     if (!tower.resourceId || tower.id === excludeTowerId) continue
-    rates.set(tower.resourceId, (rates.get(tower.resourceId) ?? 0) - TOWER_AMMO_DRAIN)
+    rates.set(tower.resourceId, (rates.get(tower.resourceId) ?? 0) - getEffectiveTowerStats(tower).consumption)
   }
   for (const [id, rate] of rates) rates.set(id, Math.max(0, rate))
   return rates
 }
 
-/** Ressourcen, deren aktuelle Rate nicht ausreicht, um sie diesem Turm als Munition
- * zuzuweisen (< 1 Einheit/Sekunde frei, nach Abzug aller ANDEREN Verbraucher). */
+/** Ressourcen, deren aktuelle Rate nicht ausreicht, um sie DIESEM Turm als Munition zuzuweisen
+ * (< seine eigene `consumption` frei, nach Abzug aller ANDEREN Verbraucher). */
 function unavailableAmmoIds(targetTowerId: string): Set<string> {
+  const targetTower = towers.find((t) => t.id === targetTowerId)
+  const consumption = targetTower ? getEffectiveTowerStats(targetTower).consumption : 0
   const rates = computeResourceRates(targetTowerId)
   const disabled = new Set<string>()
   for (const resource of RESOURCES) {
-    if ((rates.get(resource.id) ?? 0) < TOWER_AMMO_DRAIN) disabled.add(resource.id)
+    if ((rates.get(resource.id) ?? 0) < consumption) disabled.add(resource.id)
   }
   return disabled
 }
@@ -1210,7 +1350,7 @@ function unavailableAmmoIds(targetTowerId: string): Set<string> {
  * geht die Ressource aus, hört der Turm auf zu schießen, statt weiter "auf Kredit" zu feuern. */
 function hasAmmoAvailable(tower: PlacedTower): boolean {
   if (!tower.resourceId) return true
-  return (computeResourceRates(tower.id).get(tower.resourceId) ?? 0) >= TOWER_AMMO_DRAIN
+  return (computeResourceRates(tower.id).get(tower.resourceId) ?? 0) >= getEffectiveTowerStats(tower).consumption
 }
 
 function economyTick(dt: number) {
@@ -1249,6 +1389,7 @@ function render(_dt: number) {
   drawEconomyPalette()
   drawBuildings()
   drawTowerPalette()
+  drawPaletteTooltips()
   drawDefenseNetwork()
   drawTowers()
   drawTowerCombatEffects(ctx!, towers, enemies, enemyPathPixels, towerCenter)

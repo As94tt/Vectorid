@@ -1,24 +1,20 @@
 // Farb-Effekte (User-Vorgabe, komplette Tabelle, ersetzt die vorherige "C/M/Y-Mischungsverhältnis
-// bestimmt Status"-Mechanik): jede der 16 Kampf-Farben (Tier 1-5) hat ihren EIGENEN, festen Effekt,
-// der bei einem Treffer direkt angewendet wird — siehe applyAmmoEffect() als zentraler Dispatch,
-// aufgerufen aus towerdefense/combat.ts' treatHit(). Alle Stack-Felder/Konstanten leben in
-// enemies.ts (Datenmodell), diese Datei enthält nur die Anwendungs-LOGIK je Farbe.
+// bestimmt Status"-Mechanik): jede der 14 Kampf-Farben (Tier 1-5, siehe Farbsystem V3 in
+// data/resources.ts) hat ihren EIGENEN, festen Effekt, der bei einem Treffer direkt angewendet
+// wird — siehe applyAmmoEffect() als zentraler Dispatch, aufgerufen aus towerdefense/combat.ts'
+// treatHit(). Alle Stack-Felder/Konstanten leben in enemies.ts (Datenmodell), diese Datei enthält
+// nur die Anwendungs-LOGIK je Farbe.
 //
 //   Turmform -> bestimmt, wie Treffer verteilt werden (siehe combat.ts)
 //   Munition -> bestimmt hier, WELCHER Farb-Effekt beim Treffer ausgelöst wird
 //
-// Tier-3-Verstärker (Teal/Purple/Olive) erhöhen die STACK-GEWINNRATE ihrer jeweiligen Tier-4-
-// Farbfamilie (Cyan-Spektrum/Magenta-Spektrum/Yellow-Spektrum) — für Aquamarine (das selbst
-// keinen eigenen Stack-Pool führt, siehe enemies.ts-Kommentar) wird Teals Bonus stattdessen als
-// zusätzlicher Spread-Anteil interpretiert (eigene, dokumentierte Auslegung einer im Rohtext nicht
-// ganz eindeutigen Stelle: Teal erwähnt "Aquamarine-Stacks", aber Aquamarines eigene
-// Beschreibung führt keinen eigenen Stack-Aufbau — sinnvollste Deutung: Teal macht Aquamarines
-// Weiterverbreitung wirksamer).
+// Farbsystem V3 hat Teal/Purple/Olive/Brown ersatzlos gestrichen — die früheren Tier-3-
+// Verstärker-Boni (siehe Git-Historie) sind damit entfallen, Cerulean/Violet/Chartreuse/
+// Aquamarine/Fuchsia/Amber gewinnen ihre Stacks jetzt mit fixer Rate. White (neue Tier-5-Farbe,
+// Gegenstück zu Black) hat einen eigenen neuen Effekt, siehe applyWhite().
 
 import { dealDamage, type Enemy, type Tier4StackKey } from './enemies'
 import {
-  AMPLIFIER_MAX,
-  AMPLIFIER_PER_HIT,
   AQUAMARINE_BASE_SPREAD_FRACTION,
   AQUAMARINE_SPREAD_RADIUS,
   BLACK_STACK_DURATION,
@@ -33,6 +29,9 @@ import {
   TIER4_LOW_STACK_MAX,
   VIOLET_EXPLOSION_DAMAGE_FRACTION,
   VIOLET_EXPLOSION_RADIUS,
+  WHITE_BURST_FRACTION,
+  WHITE_STACK_DURATION,
+  WHITE_STACK_TRIGGER,
   YELLOW_CHAIN_JUMPS,
 } from './enemies'
 import { getPointAtProgress, type Point } from './path'
@@ -89,36 +88,31 @@ function applyGreen(target: Enemy) {
   target.greenStacks = TIER2_STACK_MAX // wird auf den Maximalwert GESETZT, nicht addiert (User-Vorgabe)
 }
 
-function applyBrown(target: Enemy) {
-  if (target.blueStacks > 0) target.blueStacks = Math.min(TIER2_STACK_MAX, target.blueStacks + 1)
-  if (target.redStacks > 0) target.redStacks = Math.min(TIER2_STACK_MAX, target.redStacks + 1)
-  if (target.greenStacks > 0) target.greenStacks = Math.min(TIER2_STACK_MAX, target.greenStacks + 1)
-}
-
-// --- Tier 3 (permanente Verstärker) ---
-
-function applyTeal(target: Enemy) {
-  target.tealAmplifier = Math.min(AMPLIFIER_MAX, target.tealAmplifier + AMPLIFIER_PER_HIT)
-}
-
-function applyPurple(target: Enemy) {
-  target.purpleAmplifier = Math.min(AMPLIFIER_MAX, target.purpleAmplifier + AMPLIFIER_PER_HIT)
-}
-
-function applyOlive(target: Enemy) {
-  target.oliveAmplifier = Math.min(AMPLIFIER_MAX, target.oliveAmplifier + AMPLIFIER_PER_HIT)
-}
-
-// --- Tier 4 ---
+// --- Tier 3 ---
 
 function applyCerulean(target: Enemy, elapsedSeconds: number) {
-  const gain = 1 * (1 + target.tealAmplifier)
-  target.ceruleanStacks = Math.min(TIER4_LOW_STACK_MAX, target.ceruleanStacks + gain)
+  target.ceruleanStacks = Math.min(TIER4_LOW_STACK_MAX, target.ceruleanStacks + 1)
   if (target.ceruleanStacks >= TIER4_LOW_STACK_MAX) {
     target.frozenUntil = elapsedSeconds + CERULEAN_FREEZE_DURATION
     target.ceruleanStacks = 0
   }
 }
+
+function applyViolet(target: Enemy, allEnemies: Enemy[], pathPixels: Point[]) {
+  target.violetStacks = Math.min(TIER4_LOW_STACK_MAX, target.violetStacks + 1)
+  if (target.violetStacks < TIER4_LOW_STACK_MAX) return
+  target.violetStacks = 0
+  const damage = target.maxHp * VIOLET_EXPLOSION_DAMAGE_FRACTION
+  for (const other of findNearbyEnemies(allEnemies, target, pathPixels, VIOLET_EXPLOSION_RADIUS, new Set())) dealDamage(other, damage)
+}
+
+function applyChartreuse(target: Enemy, damage: number, allEnemies: Enemy[], pathPixels: Point[]) {
+  target.chartreuseStacks = Math.min(TIER4_HIGH_STACK_MAX, target.chartreuseStacks + 1)
+  const jumps = Math.floor((target.chartreuseStacks / TIER4_HIGH_STACK_MAX) * CHARTREUSE_MAX_JUMPS)
+  chainLightning(target, damage, jumps, allEnemies, pathPixels)
+}
+
+// --- Tier 4 ---
 
 const TIER4_STACK_ACCESSORS: { key: Tier4StackKey; get: (e: Enemy) => number; set: (e: Enemy, v: number) => void; max: number }[] = [
   { key: 'cerulean', get: (e) => e.ceruleanStacks, set: (e, v) => (e.ceruleanStacks = v), max: TIER4_LOW_STACK_MAX },
@@ -128,11 +122,11 @@ const TIER4_STACK_ACCESSORS: { key: Tier4StackKey; get: (e: Enemy) => number; se
   { key: 'chartreuse', get: (e) => e.chartreuseStacks, set: (e, v) => (e.chartreuseStacks = v), max: TIER4_HIGH_STACK_MAX },
 ]
 
-/** Überträgt bis zu (50% + Teal-Bonus) der vorhandenen Tier-4-Stacks des Ziels auf Gegner in der
- * Nähe — Stacks, die selbst schon per Spread empfangen wurden, werden dabei ausgelassen (siehe
+/** Überträgt bis zu 50% der vorhandenen Tier-3/4-Stacks des Ziels auf Gegner in der Nähe —
+ * Stacks, die selbst schon per Spread empfangen wurden, werden dabei ausgelassen (siehe
  * `aquamarineSpreadBlock` in enemies.ts), damit keine Kettenreaktion entsteht. */
 function applyAquamarine(target: Enemy, allEnemies: Enemy[], pathPixels: Point[]) {
-  const fraction = Math.min(1, AQUAMARINE_BASE_SPREAD_FRACTION + target.tealAmplifier)
+  const fraction = AQUAMARINE_BASE_SPREAD_FRACTION
   const nearby = findNearbyEnemies(allEnemies, target, pathPixels, AQUAMARINE_SPREAD_RADIUS, new Set())
   if (nearby.length === 0) return
   for (const accessor of TIER4_STACK_ACCESSORS) {
@@ -146,30 +140,12 @@ function applyAquamarine(target: Enemy, allEnemies: Enemy[], pathPixels: Point[]
   }
 }
 
-function applyViolet(target: Enemy, allEnemies: Enemy[], pathPixels: Point[]) {
-  const gain = 1 * (1 + target.purpleAmplifier)
-  target.violetStacks = Math.min(TIER4_LOW_STACK_MAX, target.violetStacks + gain)
-  if (target.violetStacks < TIER4_LOW_STACK_MAX) return
-  target.violetStacks = 0
-  const damage = target.maxHp * VIOLET_EXPLOSION_DAMAGE_FRACTION
-  for (const other of findNearbyEnemies(allEnemies, target, pathPixels, VIOLET_EXPLOSION_RADIUS, new Set())) dealDamage(other, damage)
-}
-
 function applyFuchsia(target: Enemy) {
-  const gain = 1 * (1 + target.purpleAmplifier)
-  target.fuchsiaStacks = Math.min(TIER4_HIGH_STACK_MAX, target.fuchsiaStacks + gain)
+  target.fuchsiaStacks = Math.min(TIER4_HIGH_STACK_MAX, target.fuchsiaStacks + 1)
 }
 
 function applyAmber(target: Enemy) {
-  const gain = 1 * (1 + target.oliveAmplifier)
-  target.amberStacks = Math.min(TIER4_HIGH_STACK_MAX, target.amberStacks + gain)
-}
-
-function applyChartreuse(target: Enemy, damage: number, allEnemies: Enemy[], pathPixels: Point[]) {
-  const gain = 1 * (1 + target.oliveAmplifier)
-  target.chartreuseStacks = Math.min(TIER4_HIGH_STACK_MAX, target.chartreuseStacks + gain)
-  const jumps = Math.floor((target.chartreuseStacks / TIER4_HIGH_STACK_MAX) * CHARTREUSE_MAX_JUMPS)
-  chainLightning(target, damage, jumps, allEnemies, pathPixels)
+  target.amberStacks = Math.min(TIER4_HIGH_STACK_MAX, target.amberStacks + 1)
 }
 
 // --- Tier 5 ---
@@ -180,6 +156,15 @@ function applyBlack(target: Enemy, elapsedSeconds: number) {
   target.blackStacksExpireAt = elapsedSeconds + BLACK_STACK_DURATION
   const thresholdFraction = target.blackStacks * BLACK_THRESHOLD_PER_STACK
   if (target.hp / target.maxHp <= thresholdFraction) target.hp = 0
+}
+
+function applyWhite(target: Enemy, elapsedSeconds: number) {
+  if (target.whiteStacksExpireAt <= elapsedSeconds) target.whiteStacks = 0
+  target.whiteStacks += 1
+  target.whiteStacksExpireAt = elapsedSeconds + WHITE_STACK_DURATION
+  if (target.whiteStacks < WHITE_STACK_TRIGGER) return
+  target.whiteStacks = 0
+  dealDamage(target, target.maxHp * WHITE_BURST_FRACTION)
 }
 
 /**
@@ -207,18 +192,6 @@ export function applyAmmoEffect(resourceId: string | null, damage: number, targe
     case 'green':
       applyGreen(target)
       return
-    case 'brown':
-      applyBrown(target)
-      return
-    case 'teal':
-      applyTeal(target)
-      return
-    case 'purple':
-      applyPurple(target)
-      return
-    case 'olive':
-      applyOlive(target)
-      return
     case 'cerulean':
       applyCerulean(target, elapsedSeconds)
       return
@@ -240,6 +213,9 @@ export function applyAmmoEffect(resourceId: string | null, damage: number, targe
     case 'black':
       applyBlack(target, elapsedSeconds)
       return
+    case 'white':
+      applyWhite(target, elapsedSeconds)
+      return
   }
 }
 
@@ -252,15 +228,12 @@ export const COLOR_EFFECT_INFO: Record<string, { name: string; description: stri
   blue: { name: 'Stacking Slow', description: 'Up to 10 stacks, stronger slow per stack, -1/s' },
   red: { name: 'Decaying Burn', description: 'Up to 10 stacks of burn damage/s, -1 stack/s' },
   green: { name: 'Poison', description: 'Sets poison to a full 10 stacks, -1 stack/s' },
-  brown: { name: 'Tier-2 Amplifier', description: '+1 stack to existing Blue/Red/Green effects' },
-  teal: { name: 'Cyan-Spectrum Amplifier', description: 'Boosts future Cerulean/Aquamarine stacks' },
-  purple: { name: 'Magenta-Spectrum Amplifier', description: 'Boosts future Violet/Fuchsia stacks' },
-  olive: { name: 'Yellow-Spectrum Amplifier', description: 'Boosts future Amber/Chartreuse stacks' },
   cerulean: { name: 'Freeze', description: 'At 30 stacks, fully frozen for 1s, then resets' },
-  aquamarine: { name: 'Stack Spread', description: 'Spreads up to 50% of Tier-4 stacks to nearby enemies' },
   violet: { name: 'Explosion', description: 'At 30 stacks, area damage (3% max HP), then resets' },
+  chartreuse: { name: 'Scaling Chain Lightning', description: 'Lightning jumps (up to 10) scale with stacks' },
+  aquamarine: { name: 'Stack Spread', description: 'Spreads up to 50% of Tier-3/4 stacks to nearby enemies' },
   fuchsia: { name: 'Vulnerability', description: 'Up to +10% damage taken at 100 stacks' },
   amber: { name: 'Permanent Burn', description: 'Permanent burn, up to 1% max HP/s at 100 stacks' },
-  chartreuse: { name: 'Scaling Chain Lightning', description: 'Lightning jumps (up to 10) scale with stacks' },
   black: { name: 'Execute', description: '+0.1 percentage points execute threshold/hit, lasts 5s' },
+  white: { name: 'Overload', description: 'At 10 stacks, true damage burst (8% max HP), then resets' },
 }

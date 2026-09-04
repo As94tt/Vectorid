@@ -177,6 +177,24 @@ export function drawHexagon(
   })
 }
 
+/** Nur Outline statt Füllung — z. B. fürs "Raster erweitern"-Icon, das dieselbe Farbe wie die
+ * echten (ebenfalls nur umrissenen) Hex-Rasterzellen tragen soll. */
+export function drawHexagonOutline(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  size: number,
+  color: string,
+  lineWidth = 1.5,
+) {
+  ctx.save()
+  ctx.strokeStyle = color
+  ctx.lineWidth = lineWidth
+  regularPolygonPath(ctx, x, y, size, 6, 0)
+  ctx.stroke()
+  ctx.restore()
+}
+
 /** Nur Outline statt Füllung — z. B. für leere Bauplätze im Economy-Grid. */
 export function drawSquareOutline(
   ctx: CanvasRenderingContext2D,

@@ -24,14 +24,21 @@
 // referenziert nur Farben NIEDRIGEREN Tiers) — die Sperre verhindert nur diese rein geometrische
 // Rückkopplung übers Strahl-Rendering.
 //
-// Zwei grundverschiedene Prisma-Typen (Form = Misch-METHODE, keine Tier-Obergrenze mehr):
-//   - Dreieck (triangle): exaktes Set von 2 (Brown: 3) fest benannten Eingangsfarben.
-//   - Fünfeck (pentagon): exakte rohe Cyan/Magenta/Yellow-Teile-Summe (ignoriert gemischte
-//     Farben komplett) — außer beim Sonderfall Black, der stattdessen 4 unterschiedliche
-//     Tier-4-Farben braucht (siehe resources.ts: pentagonSpecial).
+// Zwei grundverschiedene Prisma-Typen (Form = Misch-METHODE):
+//   - Dreieck (triangle): exaktes Set von 2 fest benannten Eingangsfarben. GEOMETRISCH
+//     eingeschränkt (User-Vorgabe): das Dreieck ist so gedreht, dass seine 3 Ecken auf 3 der 6
+//     Hex-Nachbarn zeigen (die dazwischenliegenden 3 Seiten treffen keine Ecke) — von den 3
+//     eckengenauen Richtungen ist genau eine der Output, die anderen 2 (jeweils outputDirection
+//     ±2, siehe `TRIANGLE_INPUT_OFFSET`) sind die einzigen gültigen Eingänge. Ein Strahl, der die
+//     Zelle aus einer der 3 "Seiten"-Richtungen erreicht, wird NICHT registriert (siehe
+//     `registerHit()`).
+//   - Hexagon (hexagon, ersetzt das frühere Fünfeck): exakte rohe Cyan/Magenta/Yellow-Teile-Summe
+//     (ignoriert gemischte Farben komplett, siehe hexagonRecipe) ODER ein exaktes Set fest
+//     benannter Farben (siehe hexagonNamedRecipe, Sonderfall Black/White) — unverändert alle 5
+//     Nicht-Output-Seiten als gültige Eingänge, wie zuvor beim Fünfeck.
 // Ein aufgelöstes Prisma strahlt seine Ausgabe NUR NOCH in seine eine dedizierte `outputDirection`
 // ab (User-Vorgabe, per Klick drehbar wie ein Spiegel — siehe buildings.ts `rotatePrism()`),
-// nicht mehr in alle 6 Richtungen gleichzeitig. Die übrigen 5 Seiten bleiben normale Eingänge.
+// nicht mehr in alle 6 Richtungen gleichzeitig.
 //
 // Strahl-Kollision — NUR bei exakt entgegengesetzten Richtungen (User-Vorgabe, ersetzt die
 // pauschale "jede geteilte Zelle blockt"-Regel einer früheren Runde): zwei Strahlen dürfen sich
@@ -45,7 +52,7 @@
 
 import { RESOURCES, getResource, type ResourceDefinition } from '../data/resources'
 import { cellKey, hexNeighbor, inBounds, type GridCoord, type HexDirection, type PlacementGrid } from '../grid/placementGrid'
-import { reflect, type Container, type EconomyBuilding, type LightColor, type LightSource, type Mirror, type Prism } from './buildings'
+import { CONTAINER_CAPACITY_BY_LEVEL, reflect, type Container, type EconomyBuilding, type LightColor, type LightSource, type Mirror, type Prism } from './buildings'
 
 const HEX_DIRECTIONS: HexDirection[] = [0, 1, 2, 3, 4, 5]
 
@@ -104,6 +111,13 @@ function channelFor(resourceId: LightColor): 'c' | 'm' | 'y' {
 
 function oppositeDirection(dir: HexDirection): HexDirection {
   return ((dir + 3) % 6) as HexDirection
+}
+
+/** Ein gedrehtes Dreieck-Prisma hat nur an 3 der 6 Hex-Richtungen überhaupt eine Ecke (die
+ * anderen 3 treffen eine flache Seite) — outputDirection ist eine davon, die 2 anderen (je ±2,
+ * siehe render/buildingRender.ts für die passende Rotation) sind die einzigen gültigen Eingänge. */
+function isTriangleInputSide(outputDirection: HexDirection, side: HexDirection): boolean {
+  return side === (((outputDirection + 2) % 6) as HexDirection) || side === (((outputDirection + 4) % 6) as HexDirection)
 }
 
 /** Ein einzelner, noch laufender Strahl (Lichtquelle oder aufgelöstes Prisma). `cells[0]` ist die
@@ -297,11 +311,25 @@ function tracePass(
 
   function addContainerRate(container: Container, resourceId: string, rate: number) {
     const perResource = containerRates.get(container.id) ?? new Map<string, number>()
+    // Kapazität nach Level (siehe buildings.ts CONTAINER_CAPACITY_BY_LEVEL): eine NEUE Farbe, die
+    // die Kapazität sprengen würde, wird ignoriert — die zuerst angekommenen Farben "gewinnen"
+    // ihren Kapazitäts-Slot dauerhaft, bereits gehaltene Farben werden weiter normal aktualisiert.
+    const capacity = CONTAINER_CAPACITY_BY_LEVEL[container.level - 1] ?? CONTAINER_CAPACITY_BY_LEVEL[CONTAINER_CAPACITY_BY_LEVEL.length - 1]
+    if (!perResource.has(resourceId) && perResource.size >= capacity) return
     perResource.set(resourceId, (perResource.get(resourceId) ?? 0) + rate)
     containerRates.set(container.id, perResource)
   }
 
-  function registerHit(prism: Prism, fromDirection: HexDirection, resourceId: string, isRawSource: boolean) {
+  function registerHit(prism: Prism, travelDirection: HexDirection, resourceId: string, isRawSource: boolean) {
+    // `travelDirection` ist die Richtung, in die der Strahl unterwegs war, als er die Zelle
+    // erreichte — die tatsächlich berührte Seite des Prismas ist die ENTGEGENGESETZTE Richtung
+    // (der Strahl kommt aus dem Nachbarn, der von hier aus in `travelDirection` liegt, also liegt
+    // er selbst aus Prisma-Sicht in der Gegenrichtung). Wichtig für die neue Dreieck-Ecken-Regel
+    // unten: die muss an der ECHTEN, sichtbaren Seite prüfen, nicht an der Lauf-Richtung.
+    const side = oppositeDirection(travelDirection)
+
+    if (prism.prismKind === 'triangle' && !isTriangleInputSide(prism.outputDirection, side)) return
+
     if (isRawSource) {
       const counts = prismCounts.get(prism.id) ?? { c: 0, m: 0, y: 0 }
       counts[channelFor(resourceId as LightColor)] += 1
@@ -311,7 +339,7 @@ function tracePass(
     colors.add(resourceId)
     prismColors.set(prism.id, colors)
     const sides = prismSides.get(prism.id) ?? new Set<HexDirection>()
-    sides.add(fromDirection)
+    sides.add(side)
     prismSides.set(prism.id, sides)
   }
 
@@ -339,19 +367,18 @@ function resolveTriangleOutput(presentColors: Set<string>): ResourceDefinition |
   return null
 }
 
-function resolvePentagonOutput(counts: { c: number; m: number; y: number }, presentColors: Set<string>): ResourceDefinition | null {
+function resolveHexagonOutput(counts: { c: number; m: number; y: number }, presentColors: Set<string>): ResourceDefinition | null {
   const distinctChannels = [counts.c, counts.m, counts.y].filter((n) => n > 0).length
   if (distinctChannels >= 2) {
     const ratioMatch = RESOURCES.find(
-      (r) => r.tier !== 1 && r.pentagonRecipe && r.pentagonRecipe.c === counts.c && r.pentagonRecipe.m === counts.m && r.pentagonRecipe.y === counts.y,
+      (r) => r.tier !== 1 && r.hexagonRecipe && r.hexagonRecipe.c === counts.c && r.hexagonRecipe.m === counts.m && r.hexagonRecipe.y === counts.y,
     )
     if (ratioMatch) return ratioMatch
   }
-  const special = RESOURCES.find((r) => r.pentagonSpecial)
-  if (special?.pentagonSpecial) {
-    const { tier, count } = special.pentagonSpecial
-    const matchingCount = [...presentColors].filter((id) => getResource(id).tier === tier).length
-    if (matchingCount >= count) return special
+  for (const r of RESOURCES) {
+    if (!r.hexagonNamedRecipe) continue
+    if (r.hexagonNamedRecipe.length !== presentColors.size) continue
+    if (r.hexagonNamedRecipe.every((id) => presentColors.has(id))) return r
   }
   return null
 }
@@ -374,7 +401,7 @@ export function simulateLight(grid: PlacementGrid, sources: LightSource[], mirro
       if (prismOutputs.get(prism.id)) continue // bereits aufgelöst -> gesperrt, siehe Datei-Kommentar
       const counts = pass.prismCounts.get(prism.id) ?? { c: 0, m: 0, y: 0 }
       const colors = pass.prismColors.get(prism.id) ?? new Set<string>()
-      const resolved = prism.prismKind === 'triangle' ? resolveTriangleOutput(colors) : resolvePentagonOutput(counts, colors)
+      const resolved = prism.prismKind === 'triangle' ? resolveTriangleOutput(colors) : resolveHexagonOutput(counts, colors)
       if (resolved) {
         nextOutputs.set(prism.id, resolved)
         changed = true

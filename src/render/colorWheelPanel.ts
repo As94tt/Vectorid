@@ -54,7 +54,7 @@ export function hitTestWheelSwatch(swatches: WheelSwatch[], x: number, y: number
   return swatches.find((s) => Math.hypot(s.x - x, s.y - y) <= s.radius + 6) ?? null
 }
 
-/** Zeigt beide alternativen Misch-Rezepte (Dreieck + Fünfeck, siehe data/resources.ts) — der
+/** Zeigt beide alternativen Misch-Rezepte (Dreieck + Hexagon, siehe data/resources.ts) — der
  * Spieler kann sich für jede Farbe aussuchen, welchen Prisma-Typ er dafür baut. */
 function describeRecipe(resource: ResourceDefinition): string {
   if (resource.tier === 'special') return 'Combat resource (no mixing)'
@@ -64,22 +64,24 @@ function describeRecipe(resource: ResourceDefinition): string {
   if (resource.triangleRecipe) {
     alternatives.push(`Triangle: ${resource.triangleRecipe.map((id) => getResource(id).name).join(' + ')}`)
   }
-  if (resource.pentagonRecipe) {
-    const { c, m, y } = resource.pentagonRecipe
+  if (resource.hexagonRecipe) {
+    const { c, m, y } = resource.hexagonRecipe
     const parts: string[] = []
     if (c > 0) parts.push(`${c} Cyan`)
     if (m > 0) parts.push(`${m} Magenta`)
     if (y > 0) parts.push(`${y} Yellow`)
-    alternatives.push(`Pentagon: ${parts.join(' + ')}`)
+    alternatives.push(`Hexagon: ${parts.join(' + ')}`)
   }
-  if (resource.pentagonSpecial) {
-    alternatives.push(`Pentagon: any ${resource.pentagonSpecial.count} Tier-${resource.pentagonSpecial.tier} colors`)
+  if (resource.hexagonNamedRecipe) {
+    alternatives.push(`Hexagon: ${resource.hexagonNamedRecipe.map((id) => getResource(id).name).join(' + ')}`)
   }
   return alternatives.join(' · ')
 }
 
-/** Text mit eigenem, blickdichtem Hintergrund-Chip — bleibt lesbar, egal was dahinterliegt. */
-function drawLabel(
+/** Text mit eigenem, blickdichtem Hintergrund-Chip — bleibt lesbar, egal was dahinterliegt.
+ * Exportiert, damit render/towerRender.ts denselben Chip-Look für Hover-Tooltips wiederverwenden
+ * kann, statt ihn zu duplizieren. */
+export function drawLabel(
   ctx: CanvasRenderingContext2D,
   text: string,
   x: number,
@@ -143,7 +145,7 @@ export function drawColorWheelPanel(
   ctx.restore()
 
   drawLabel(ctx, 'C O L O R W H E E L', centerX, centerY - 320, 'bold 16px monospace', COLORS.textBright, 20)
-  drawLabel(ctx, subtitle, centerX, centerY - 300, '11px monospace', COLORS.textDim, 14)
+  drawLabel(ctx, subtitle, centerX, centerY - 300, '12px monospace', COLORS.textMid, 15)
 
   for (const swatch of swatches) {
     const isHovered = hoveredId === swatch.resource.id
@@ -159,9 +161,9 @@ export function drawColorWheelPanel(
       swatch.resource.name,
       swatch.x,
       swatch.y + swatch.radius + 14,
-      '9px monospace',
-      isHovered ? COLORS.textBright : COLORS.textDim,
-      11,
+      '11px monospace',
+      isHovered ? COLORS.textBright : COLORS.textMid,
+      13,
     )
   }
 

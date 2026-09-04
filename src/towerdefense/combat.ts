@@ -11,7 +11,7 @@ import { TOWER_UNSELECTED_COLOR } from '../render/towerRender'
 import { applyAmmoEffect } from './ammoEffects'
 import { dealDamage, type Enemy } from './enemies'
 import { getPointAtProgress, type Point } from './path'
-import { getTowerDefinition, type PlacedTower, type TowerDefinition, type TowerKind } from './towers'
+import { getEffectiveTowerStats, getTowerDefinition, type PlacedTower, type TowerDefinition, type TowerKind } from './towers'
 
 export interface Projectile {
   id: string
@@ -260,7 +260,10 @@ export function updateTowers(
   effects: VisualEffect[],
 ) {
   for (const tower of towers) {
-    const def = getTowerDefinition(tower.kind)
+    // Level-Skalierung (siehe towerdefense/towers.ts getEffectiveTowerStats()): überschreibt nur
+    // die numerischen Kampf-/Verbrauchswerte, alle übrigen Definitions-Felder (Form-spezifische
+    // Parameter wie coneAngle/projectileCount/chargeTime/volleyCount) bleiben die Basis-Werte.
+    const def: TowerDefinition = { ...getTowerDefinition(tower.kind), ...getEffectiveTowerStats(tower) }
     const center = towerCenter(tower)
     tower.cooldown = Math.max(0, tower.cooldown - dt)
 

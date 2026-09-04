@@ -29,10 +29,14 @@ export interface TowerDefinition {
   chargeTime?: number
   /** Nur Burst: wie viele Projektile eine Salve auf einmal abfeuert. */
   volleyCount?: number
+  /** Einheiten/Sekunde der zugewiesenen Munitionsfarbe, die dieser Turm braucht, um "versorgt" zu
+   * bleiben (siehe main.ts hasAmmoAvailable() — ersetzt den früheren globalen TOWER_AMMO_DRAIN).
+   * Platzhalter-Werte, grob an Feuerrate/Schaden orientiert, noch nicht ausbalanciert. */
+  consumption: number
 }
 
 export const TOWER_DEFINITIONS: TowerDefinition[] = [
-  { kind: 'pulse', name: 'Pulse', description: '360° pulses, short range, hits many enemies', cost: 15, range: 90, damage: 8, fireInterval: 1.0 },
+  { kind: 'pulse', name: 'Pulse', description: '360° pulses, short range, hits many enemies', cost: 15, range: 90, damage: 8, fireInterval: 1.0, consumption: 1 },
   {
     kind: 'rapid',
     name: 'Rapid',
@@ -42,6 +46,7 @@ export const TOWER_DEFINITIONS: TowerDefinition[] = [
     damage: 3,
     fireInterval: 0.15,
     projectileSpeed: 500,
+    consumption: 2,
   },
   {
     kind: 'cannon',
@@ -53,6 +58,7 @@ export const TOWER_DEFINITIONS: TowerDefinition[] = [
     fireInterval: 1.4,
     projectileSpeed: 180,
     splashRadius: 42,
+    consumption: 1.5,
   },
   {
     kind: 'multishot',
@@ -64,6 +70,7 @@ export const TOWER_DEFINITIONS: TowerDefinition[] = [
     fireInterval: 0.9,
     projectileSpeed: 420,
     projectileCount: 3,
+    consumption: 2,
   },
   {
     kind: 'sniper',
@@ -74,6 +81,7 @@ export const TOWER_DEFINITIONS: TowerDefinition[] = [
     damage: 34,
     fireInterval: 2.2,
     projectileSpeed: 900,
+    consumption: 1.5,
   },
   {
     kind: 'flamethrower',
@@ -84,8 +92,9 @@ export const TOWER_DEFINITIONS: TowerDefinition[] = [
     damage: 4,
     fireInterval: 0.15,
     coneAngle: 55,
+    consumption: 2.5,
   },
-  { kind: 'beam', name: 'Beam', description: 'Permanent laser locked on one target', cost: 60, range: 150, damage: 5, fireInterval: 0.15 },
+  { kind: 'beam', name: 'Beam', description: 'Permanent laser locked on one target', cost: 60, range: 150, damage: 5, fireInterval: 0.15, consumption: 2.5 },
   {
     kind: 'burst',
     name: 'Burst',
@@ -97,6 +106,7 @@ export const TOWER_DEFINITIONS: TowerDefinition[] = [
     projectileSpeed: 480,
     chargeTime: 1.6,
     volleyCount: 5,
+    consumption: 2,
   },
 ]
 
@@ -104,6 +114,42 @@ export function getTowerDefinition(kind: TowerKind): TowerDefinition {
   const def = TOWER_DEFINITIONS.find((d) => d.kind === kind)
   if (!def) throw new Error(`Unknown tower type: ${kind}`)
   return def
+}
+
+/** 1-50 (User-Vorgabe, deutlich mehr als die 5 Level der Economy-Gebäude). Exakte Kurve ist
+ * bewusst ein Platzhalter (User: "Zahlen werden später angepasst") — isoliert hier in EINER
+ * Stelle, damit sich die Balance später ändern lässt, ohne Aufrufer anzufassen. */
+export const TOWER_MAX_LEVEL = 50
+const TOWER_LEVEL_STAT_MULTIPLIER = (level: number) => 1 + (level - 1) * 0.06 // ~3.94x bei Level 50
+
+export function towerUpgradeCost(def: TowerDefinition, targetLevel: number): number {
+  return Math.round(def.cost * 0.5 * targetLevel)
+}
+
+/** Alle numerischen Kampf-/Verbrauchswerte eines Turms, multipliziert mit seiner Level-Kurve —
+ * wie `getTowerDefinition()` immer live berechnet, nichts wird auf `PlacedTower` gespeichert. */
+export interface EffectiveTowerStats {
+  damage: number
+  range: number
+  fireInterval: number
+  projectileSpeed?: number
+  splashRadius?: number
+  consumption: number
+}
+
+export function getEffectiveTowerStats(tower: PlacedTower): EffectiveTowerStats {
+  const def = getTowerDefinition(tower.kind)
+  const mult = TOWER_LEVEL_STAT_MULTIPLIER(tower.level)
+  return {
+    damage: def.damage * mult,
+    range: def.range * mult,
+    // Feuerrate soll mit dem Level SCHNELLER werden, nicht langsamer -> Intervall durch den
+    // Multiplikator TEILEN statt multiplizieren.
+    fireInterval: def.fireInterval / mult,
+    projectileSpeed: def.projectileSpeed !== undefined ? def.projectileSpeed * mult : undefined,
+    splashRadius: def.splashRadius !== undefined ? def.splashRadius * mult : undefined,
+    consumption: def.consumption * mult,
+  }
 }
 
 export interface PlacedTower {
@@ -115,6 +161,8 @@ export interface PlacedTower {
   row: number
   /** Munitionstyp (Ressourcen-Id) — null solange noch nicht gewählt. */
   resourceId: string | null
+  /** 1-50, siehe TOWER_MAX_LEVEL/getEffectiveTowerStats(). */
+  level: number
   /** Aktuelle Blickrichtung in Radiant (Canvas-Konvention, 0 = Osten) — fürs Rendering, wird
    * beim Zielen kontinuierlich nachgeführt (siehe towerdefense/combat.ts). */
   rotation: number
@@ -146,6 +194,7 @@ export function createTower(id: string, kind: TowerKind, col: number, row: numbe
     col,
     row,
     resourceId: null,
+    level: 1,
     rotation: defaultTowerRotation(kind),
     cooldown: 0,
     lockedTargetId: null,
