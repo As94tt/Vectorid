@@ -16,9 +16,9 @@ const CLOSE_BUTTON_SIZE = 28
 const PANEL_RADIUS = 345
 const PANEL_FILL = '#0b0d12'
 
-function ring(resources: ResourceDefinition[], centerX: number, centerY: number, ringRadius: number, swatchRadius: number): WheelSwatch[] {
+function ring(resources: ResourceDefinition[], centerX: number, centerY: number, ringRadius: number, swatchRadius: number, phaseOffset = 0): WheelSwatch[] {
   return resources.map((resource, i) => {
-    const angle = -Math.PI / 2 + (i / resources.length) * Math.PI * 2
+    const angle = -Math.PI / 2 + phaseOffset + (i / resources.length) * Math.PI * 2
     return {
       resource,
       x: centerX + ringRadius * Math.cos(angle),
@@ -36,7 +36,7 @@ export function buildWheelLayout(width: number, height: number): WheelSwatch[] {
     ...ring(getResourcesByTier(2), centerX, centerY, 125, 13),
     ...ring(getResourcesByTier(3), centerX, centerY, 185, 12),
     ...ring(getResourcesByTier(4), centerX, centerY, 245, 11),
-    ...ring([...getResourcesByTier(5), ...getResourcesByTier('special')], centerX, centerY, 300, 12),
+    ...ring([...getResourcesByTier(5), ...getResourcesByTier('special')], centerX, centerY, 300, 12, Math.PI / 6),
   ]
 }
 
@@ -57,12 +57,12 @@ export function hitTestWheelSwatch(swatches: WheelSwatch[], x: number, y: number
 /** Zeigt beide alternativen Misch-Rezepte (Dreieck + Fünfeck, siehe data/resources.ts) — der
  * Spieler kann sich für jede Farbe aussuchen, welchen Prisma-Typ er dafür baut. */
 function describeRecipe(resource: ResourceDefinition): string {
-  if (resource.tier === 'special') return 'Kampf-Ressource (keine Mischung)'
-  if (resource.tier === 1) return 'Grundfarbe (wird gekauft)'
+  if (resource.tier === 'special') return 'Combat resource (no mixing)'
+  if (resource.tier === 1) return 'Base color (purchased)'
 
   const alternatives: string[] = []
   if (resource.triangleRecipe) {
-    alternatives.push(`Dreieck: ${resource.triangleRecipe.map((id) => getResource(id).name).join(' + ')}`)
+    alternatives.push(`Triangle: ${resource.triangleRecipe.map((id) => getResource(id).name).join(' + ')}`)
   }
   if (resource.pentagonRecipe) {
     const { c, m, y } = resource.pentagonRecipe
@@ -70,10 +70,10 @@ function describeRecipe(resource: ResourceDefinition): string {
     if (c > 0) parts.push(`${c} Cyan`)
     if (m > 0) parts.push(`${m} Magenta`)
     if (y > 0) parts.push(`${y} Yellow`)
-    alternatives.push(`Fünfeck: ${parts.join(' + ')}`)
+    alternatives.push(`Pentagon: ${parts.join(' + ')}`)
   }
   if (resource.pentagonSpecial) {
-    alternatives.push(`Fünfeck: ${resource.pentagonSpecial.count} beliebige Tier-${resource.pentagonSpecial.tier}-Farben`)
+    alternatives.push(`Pentagon: any ${resource.pentagonSpecial.count} Tier-${resource.pentagonSpecial.tier} colors`)
   }
   return alternatives.join(' · ')
 }
@@ -119,7 +119,7 @@ export function drawColorWheelPanel(
   height: number,
   swatches: WheelSwatch[],
   hoveredId: string | null,
-  subtitle = 'Tier 1 innen -> Tier 5 außen, Lumen/Prisma im äußersten Ring',
+  subtitle = 'Tier 1 inside -> Tier 5 outside, Lumen/Prism in the outer ring',
   disabledIds: Set<string> = new Set(),
 ) {
   const centerX = width / 2
@@ -142,7 +142,7 @@ export function drawColorWheelPanel(
   ctx.stroke()
   ctx.restore()
 
-  drawLabel(ctx, 'F A R B W H E E L', centerX, centerY - 320, 'bold 16px monospace', COLORS.textBright, 20)
+  drawLabel(ctx, 'C O L O R W H E E L', centerX, centerY - 320, 'bold 16px monospace', COLORS.textBright, 20)
   drawLabel(ctx, subtitle, centerX, centerY - 300, '11px monospace', COLORS.textDim, 14)
 
   for (const swatch of swatches) {
@@ -166,10 +166,10 @@ export function drawColorWheelPanel(
   }
 
   const hovered = swatches.find((s) => s.resource.id === hoveredId)
-  let infoText = 'Fahre über eine Farbe für die Zusammensetzung'
+  let infoText = 'Hover over a color to see its recipe'
   if (hovered) {
     infoText = `${hovered.resource.name} — ${describeRecipe(hovered.resource)}`
-    if (disabledIds.has(hovered.resource.id)) infoText += ' (Rate zu niedrig)'
+    if (disabledIds.has(hovered.resource.id)) infoText += ' (rate too low)'
   }
   drawLabel(ctx, infoText, centerX, centerY + 320, '13px monospace', COLORS.textBright, 18)
 

@@ -29,10 +29,10 @@ export function buildHudButtons(canvasWidth: number): HudButton[] {
   // gepackt sind (10/12 Icons, siehe CLAUDE.md), UND weil der Modus für BEIDE Seiten gleichzeitig
   // gilt (Economy-Gebäude UND Türme), nicht nur für eine.
   const order: { id: HudButton['id']; label: string }[] = [
-    { id: 'settings', label: 'EINSTELLUNGEN' },
-    { id: 'save', label: 'SPEICHERN' },
+    { id: 'settings', label: 'SETTINGS' },
+    { id: 'save', label: 'SAVE' },
     { id: 'cheat', label: 'CHEAT +10' },
-    { id: 'demolish', label: 'ABRISS' },
+    { id: 'demolish', label: 'DEMOLISH' },
   ]
   return order.map((o, i) => ({
     ...o,
@@ -57,7 +57,7 @@ function drawButton(ctx: CanvasRenderingContext2D, button: HudButton, active: bo
   ctx.font = '11px monospace'
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
-  ctx.fillText(active ? 'ABRISS: AN' : button.label, button.x + button.width / 2, button.y + button.height / 2 + 1)
+  ctx.fillText(active ? 'DEMOLISH: ON' : button.label, button.x + button.width / 2, button.y + button.height / 2 + 1)
   ctx.restore()
 }
 

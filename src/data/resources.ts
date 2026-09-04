@@ -96,12 +96,12 @@ export const RESOURCES: ResourceDefinition[] = [
 
   // Spezial-Ressourcen — kein Teil des Farb-Wheels, kommen aus Kämpfen statt Wirtschaft.
   { id: 'lumen', name: 'Lumen', tier: 'special', color: '#ffffff' },
-  { id: 'prisma', name: 'Prisma', tier: 'special', color: '#e6d9ff' },
+  { id: 'prisma', name: 'Prism', tier: 'special', color: '#e6d9ff' },
 ]
 
 export function getResource(id: string): ResourceDefinition {
   const found = RESOURCES.find((r) => r.id === id)
-  if (!found) throw new Error(`Unbekannte Ressource: ${id}`)
+  if (!found) throw new Error(`Unknown resource: ${id}`)
   return found
 }
 

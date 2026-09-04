@@ -80,10 +80,10 @@ export function buildTowerPalette(startX: number, y: number, gap: number): Tower
     radius: PALETTE_RADIUS,
   }))
   const extraKinds: { kind: TowerPaletteKind; name: string; costResourceId: string; cost: number }[] = [
-    { kind: 'mirror', name: 'Spiegel', cost: BUILDING_COSTS.mirror, costResourceId: 'lumen' },
+    { kind: 'mirror', name: 'Mirror', cost: BUILDING_COSTS.mirror, costResourceId: 'lumen' },
     { kind: 'expand-grid', name: 'Grid', cost: GRID_EXPAND_COST, costResourceId: 'prisma' },
-    { kind: 'tower-info', name: 'Türme', cost: 0, costResourceId: 'lumen' },
-    { kind: 'ammo-info', name: 'Munition', cost: 0, costResourceId: 'lumen' },
+    { kind: 'tower-info', name: 'Towers', cost: 0, costResourceId: 'lumen' },
+    { kind: 'ammo-info', name: 'Ammo', cost: 0, costResourceId: 'lumen' },
   ]
   const extraItems: TowerPaletteItem[] = extraKinds.map((item, i) => ({
     ...item,

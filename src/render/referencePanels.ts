@@ -115,7 +115,7 @@ function wrapLines(ctx: CanvasRenderingContext2D, text: string, maxWidth: number
 }
 
 export function drawTowerReferencePanel(ctx: CanvasRenderingContext2D, width: number, height: number) {
-  const bounds = drawPanelChrome(ctx, width, height, 'T Ü R M E')
+  const bounds = drawPanelChrome(ctx, width, height, 'T O W E R S')
 
   const cols = 2
   const rows = Math.ceil(TOWER_DEFINITIONS.length / cols)
@@ -153,14 +153,14 @@ export function drawTowerReferencePanel(ctx: CanvasRenderingContext2D, width: nu
     const projectile = def.projectileSpeed ? `${def.projectileSpeed}px/s` : '—'
     ctx.fillStyle = COLORS.textDim
     ctx.font = '9px monospace'
-    ctx.fillText(`Schaden ${def.damage}  ·  Reichweite ${def.range}px`, textX, cellY + cellH - 22)
-    ctx.fillText(`Tempo ${attackSpeed}/s  ·  Projektil ${projectile}`, textX, cellY + cellH - 10)
+    ctx.fillText(`Damage ${def.damage}  ·  Range ${def.range}px`, textX, cellY + cellH - 22)
+    ctx.fillText(`Rate ${attackSpeed}/s  ·  Projectile ${projectile}`, textX, cellY + cellH - 10)
     ctx.restore()
   })
 }
 
 export function drawAmmoReferencePanel(ctx: CanvasRenderingContext2D, width: number, height: number) {
-  const bounds = drawPanelChrome(ctx, width, height, 'M U N I T I O N', 'Jede Farbe hat ihren eigenen festen Effekt je Treffer')
+  const bounds = drawPanelChrome(ctx, width, height, 'A M M O', 'Each color has its own fixed effect per hit')
 
   const ammoResources = RESOURCES.filter((r) => r.tier !== 'special')
   const cols = 2

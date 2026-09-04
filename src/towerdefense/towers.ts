@@ -32,11 +32,11 @@ export interface TowerDefinition {
 }
 
 export const TOWER_DEFINITIONS: TowerDefinition[] = [
-  { kind: 'pulse', name: 'Pulse', description: '360°-Impulse, kurze Reichweite, viele Gegner', cost: 15, range: 90, damage: 8, fireInterval: 1.0 },
+  { kind: 'pulse', name: 'Pulse', description: '360° pulses, short range, hits many enemies', cost: 15, range: 90, damage: 8, fireInterval: 1.0 },
   {
     kind: 'rapid',
     name: 'Rapid',
-    description: 'Sehr hohe Feuerrate, niedriger Schaden pro Treffer',
+    description: 'Very high fire rate, low damage per hit',
     cost: 20,
     range: 110,
     damage: 3,
@@ -46,7 +46,7 @@ export const TOWER_DEFINITIONS: TowerDefinition[] = [
   {
     kind: 'cannon',
     name: 'Cannon',
-    description: 'Langsame Projektile, Flächenschaden',
+    description: 'Slow projectiles, area damage',
     cost: 25,
     range: 130,
     damage: 16,
@@ -57,7 +57,7 @@ export const TOWER_DEFINITIONS: TowerDefinition[] = [
   {
     kind: 'multishot',
     name: 'Multishot',
-    description: 'Mehrere Projektile gleichzeitig',
+    description: 'Fires multiple projectiles at once',
     cost: 35,
     range: 120,
     damage: 6,
@@ -68,7 +68,7 @@ export const TOWER_DEFINITIONS: TowerDefinition[] = [
   {
     kind: 'sniper',
     name: 'Sniper',
-    description: 'Langsam, hohe Reichweite, hoher Einzelschaden',
+    description: 'Slow, long range, high single-target damage',
     cost: 40,
     range: 230,
     damage: 34,
@@ -78,18 +78,18 @@ export const TOWER_DEFINITIONS: TowerDefinition[] = [
   {
     kind: 'flamethrower',
     name: 'Flamethrower',
-    description: 'Kontinuierlicher Kegel/Stream',
+    description: 'Continuous cone-shaped stream',
     cost: 45,
     range: 75,
     damage: 4,
     fireInterval: 0.15,
     coneAngle: 55,
   },
-  { kind: 'beam', name: 'Beam', description: 'Permanenter Laser auf ein Ziel', cost: 60, range: 150, damage: 5, fireInterval: 0.15 },
+  { kind: 'beam', name: 'Beam', description: 'Permanent laser locked on one target', cost: 60, range: 150, damage: 5, fireInterval: 0.15 },
   {
     kind: 'burst',
     name: 'Burst',
-    description: 'Lädt auf, feuert starke Salven',
+    description: 'Charges up, then fires powerful volleys',
     cost: 70,
     range: 140,
     damage: 9,
@@ -102,7 +102,7 @@ export const TOWER_DEFINITIONS: TowerDefinition[] = [
 
 export function getTowerDefinition(kind: TowerKind): TowerDefinition {
   const def = TOWER_DEFINITIONS.find((d) => d.kind === kind)
-  if (!def) throw new Error(`Unbekannter Turmtyp: ${kind}`)
+  if (!def) throw new Error(`Unknown tower type: ${kind}`)
   return def
 }
 

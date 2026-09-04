@@ -73,7 +73,7 @@ import { drawAmmoReferencePanel, drawTowerReferencePanel, hitTestReferencePanelC
 
 const canvas = document.getElementById('scene') as HTMLCanvasElement
 const ctx = canvas.getContext('2d')
-if (!ctx) throw new Error('Canvas 2D context wird nicht unterstützt')
+if (!ctx) throw new Error('Canvas 2D context is not supported')
 
 let width = 0
 let height = 0
@@ -882,11 +882,11 @@ function drawInfoPanel() {
     anchor = buildingCenter(source)
     const active = lightSimulation.activeSourceIds.has(source.id)
     rowsInput = [
-      { label: 'Name', value: 'Lichtquelle' },
-      { label: 'Farbe', value: getResource(source.resourceId).name },
+      { label: 'Name', value: 'Light Source' },
+      { label: 'Color', value: getResource(source.resourceId).name },
       { label: 'Level', value: '1' },
-      { label: 'Reichweite', value: `${source.range} Felder` },
-      { label: 'Rate', value: active ? `${source.baseRate.toFixed(1)}/s` : '0.0/s (kein Container)' },
+      { label: 'Range', value: `${source.range} cells` },
+      { label: 'Rate', value: active ? `${source.baseRate.toFixed(1)}/s` : '0.0/s (no container)' },
     ]
   } else if (infoTarget.kind === 'container') {
     const container = containers.find((c) => c.id === infoTarget!.id)
@@ -898,7 +898,7 @@ function drawInfoPanel() {
     const rates = lightSimulation.containerRates.get(container.id)
     const rateRows = rates
       ? [...rates].map(([resourceId, rate]) => ({ label: getResource(resourceId).name, value: `${rate.toFixed(1)}/s` }))
-      : [{ label: 'Empfängt', value: '—' }]
+      : [{ label: 'Receiving', value: '—' }]
     rowsInput = [{ label: 'Name', value: 'Container' }, { label: 'Level', value: '1' }, ...rateRows]
   } else {
     const tower = towers.find((t) => t.id === infoTarget!.id)
@@ -908,15 +908,15 @@ function drawInfoPanel() {
     }
     anchor = towerCenter(tower)
     const def = getTowerDefinition(tower.kind)
-    const ammoLabel = tower.resourceId ? getResource(tower.resourceId).name : '— (wählen)'
+    const ammoLabel = tower.resourceId ? getResource(tower.resourceId).name : '— (choose)'
     rowsInput = [
       { label: 'Name', value: def.name },
-      { label: 'Munition', value: hasAmmoAvailable(tower) ? ammoLabel : `${ammoLabel} (Mangel!)`, clickable: true },
+      { label: 'Ammo', value: hasAmmoAvailable(tower) ? ammoLabel : `${ammoLabel} (Shortage!)`, clickable: true },
       { label: 'Level', value: '1' },
-      { label: 'Schaden', value: `${def.damage}` },
-      { label: 'Reichweite', value: `${def.range}px` },
-      { label: 'Angriffstempo', value: `${(1 / def.fireInterval).toFixed(2)}/s` },
-      { label: 'Projektiltempo', value: def.projectileSpeed ? `${def.projectileSpeed}px/s` : '—' },
+      { label: 'Damage', value: `${def.damage}` },
+      { label: 'Range', value: `${def.range}px` },
+      { label: 'Attack Speed', value: `${(1 / def.fireInterval).toFixed(2)}/s` },
+      { label: 'Projectile Speed', value: def.projectileSpeed ? `${def.projectileSpeed}px/s` : '—' },
     ]
   }
 
@@ -1151,7 +1151,7 @@ function drawBuildings() {
   ctx!.fillStyle = COLORS.textDim
   ctx!.font = '11px monospace'
   ctx!.textAlign = 'right'
-  ctx!.fillText('L I C H T', placementGrid.originX + gridPixelWidth(placementGrid), placementGrid.originY - 12)
+  ctx!.fillText('L I G H T', placementGrid.originX + gridPixelWidth(placementGrid), placementGrid.originY - 12)
   ctx!.restore()
 
   for (const segment of lightSimulation.segments) drawBeamSegment(ctx!, placementGrid, segment)
@@ -1268,7 +1268,7 @@ function render(_dt: number) {
       height,
       wheelSwatches,
       hoveredWheelResourceId,
-      'Klicke eine Farbe, um sie diesem Turm als Munition zuzuweisen',
+      'Click a color to assign it to this tower as ammo',
       unavailableAmmoIds(ammoTargetTowerId),
     )
   }

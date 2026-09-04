@@ -26,7 +26,7 @@ export function drawEntity(ctx: CanvasRenderingContext2D, entity: Entity) {
       return
     default: {
       const _exhaustive: never = shape
-      throw new Error(`Unbekannter shape-Typ: ${_exhaustive}`)
+      throw new Error(`Unknown shape type: ${_exhaustive}`)
     }
   }
 }
