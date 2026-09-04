@@ -85,10 +85,11 @@ export const RESOURCES: ResourceDefinition[] = [
   mixed('fuchsia', 'Fuchsia', 4, '#FF00AA', ['violet', 'magenta'], { c: 1, m: 3, y: 1 }),
   mixed('amber', 'Amber', 4, '#FFAA00', ['chartreuse', 'yellow'], { c: 1, m: 1, y: 3 }),
 
-  // Tier 5 — Krönung: kein Dreieck-Rezept, Hexagon braucht 3 fest benannte Tier-3/4-Farben statt
-  // einer C/M/Y-Summe (siehe hexagonNamedRecipe).
-  { id: 'black', name: 'Black', tier: 5, color: '#000000', hexagonNamedRecipe: ['cerulean', 'violet', 'amber'] },
-  { id: 'white', name: 'White', tier: 5, color: '#FFFFFF', hexagonNamedRecipe: ['aquamarine', 'fuchsia', 'chartreuse'] },
+  // Tier 5 — Krönung: kein Dreieck-Rezept, Hexagon braucht ALLE 3 Farben des jeweils
+  // niedrigeren Tiers statt einer C/M/Y-Summe (Black = alle Tier-3-Farben, White = alle
+  // Tier-4-Farben, siehe hexagonNamedRecipe).
+  { id: 'black', name: 'Black', tier: 5, color: '#000000', hexagonNamedRecipe: ['cerulean', 'violet', 'chartreuse'] },
+  { id: 'white', name: 'White', tier: 5, color: '#FFFFFF', hexagonNamedRecipe: ['aquamarine', 'fuchsia', 'amber'] },
 
   // Spezial-Ressourcen — kein Teil des Farb-Wheels, kommen aus Kämpfen statt Wirtschaft.
   { id: 'lumen', name: 'Lumen', tier: 'special', color: '#fff2b0' }, // eigener Ton, damit es sich vom neuen Tier-5 "White" (#FFFFFF) unterscheidet

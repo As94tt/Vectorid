@@ -81,7 +81,7 @@ import { updateProjectiles, updateTowers, pruneVisualEffects, type Projectile, t
 import { pruneEnemies, tickEnemy, type Enemy } from './towerdefense/enemies'
 import { createWaveState, isBossWave, registerLeak, tickWaveSpawning, BOSS_LUMEN_MULTIPLIER, type WaveState } from './towerdefense/waves'
 import { drawEnemies, drawProjectiles, drawTowerCombatEffects, drawVisualEffects } from './render/combatRender'
-import { drawColorGuidePanel, drawTowerReferencePanel, hitTestReferencePanelClose } from './render/referencePanels'
+import { drawColorGuideList, drawTowerReferencePanel, drawWelcomePanel, hitTestReferencePanelClose } from './render/referencePanels'
 
 const canvas = document.getElementById('scene') as HTMLCanvasElement
 const ctx = canvas.getContext('2d')
@@ -90,6 +90,11 @@ if (!ctx) throw new Error('Canvas 2D context is not supported')
 let width = 0
 let height = 0
 let economyZoneWidth = 0
+/** Fest reservierter Streifen zwischen Economy- und Defense-Seite für den Farb-Guide (User-
+ * Vorgabe: "als Feld zwischen economy und defense", nicht als blockierendes Popup) — die Breite
+ * ist immer da, unabhängig davon, ob `colorGuideOpen` gerade Inhalt zeigt oder nur den Toggle. */
+const MIDDLE_STRIP_WIDTH = 230
+let defenseZoneX = 0
 
 // Info-Feld oben (Spielername/Level/Ressourcen/Einstellungen/Speichern/Cheat) + Bestand.
 const inventory: Inventory = createInventory()
@@ -109,9 +114,30 @@ let hoveredWheelResourceId: string | null = null
 // Nachschlage-Seite "Türme" auf der Defense-Seite (aus dem 'tower-info'-Icon der Kauf-Leiste
 // geöffnet): reine Anzeige, blockiert wie das Farbwheel alle anderen Interaktionen, solange offen.
 let towersInfoOpen = false
-// Kombinierte Farb-/Effekt-Hilfeseite (neues Icon zwischen Economy- und Defense-Seite, siehe
-// drawHelpToggle()) — ersetzt die früheren getrennten "Colors"/"Effekte"-Bildseiten.
+// Kombinierter Farb-Guide im festen Mittel-Feld zwischen Economy- und Defense-Seite (siehe
+// drawMiddleStrip()) — ersetzt die früheren getrennten "Colors"/"Effekte"-Bildseiten. Bewusst
+// NICHT blockierend: klappt nur den Inhalt des immer vorhandenen Streifens auf/zu.
 let colorGuideOpen = false
+
+// Einmaliges Tutorial-Popup (User-Vorgabe: "beim ersten starten") — merkt sich per localStorage,
+// ob es schon gezeigt wurde, damit es bei künftigen Besuchen nicht erneut aufploppt (versucht
+// erst gar nicht, mehr als dieses eine Flag zu speichern — es gibt sonst kein Save-System).
+const TUTORIAL_SEEN_KEY = 'vectoid-tutorial-seen'
+function hasSeenTutorial(): boolean {
+  try {
+    return localStorage.getItem(TUTORIAL_SEEN_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+function markTutorialSeen() {
+  try {
+    localStorage.setItem(TUTORIAL_SEEN_KEY, '1')
+  } catch {
+    // Private-Browsing o. Ä. — dann zeigt sich das Tutorial halt jedes Mal, kein Absturz nötig.
+  }
+}
+let welcomeOpen = !hasSeenTutorial()
 
 // Info-Panel (Klick auf ein Gebäude/einen Turm): zeigt Name/Level/Produktionsdaten bzw.
 // Name/Munition/Level. Blockiert wie das Farbwheel alle anderen Interaktionen, solange offen.
@@ -168,11 +194,12 @@ function nextTowerId(): string {
 }
 
 function buildScene() {
-  economyZoneWidth = width * 0.4
+  economyZoneWidth = (width - MIDDLE_STRIP_WIDTH) * 0.4
+  defenseZoneX = economyZoneWidth + MIDDLE_STRIP_WIDTH
 
   hudButtons = buildHudButtons(width)
   paletteItems = buildPalette(56, HUD_HEIGHT + 46, 76)
-  towerPaletteItems = buildTowerPalette(economyZoneWidth + 56, HUD_HEIGHT + 46, 68)
+  towerPaletteItems = buildTowerPalette(defenseZoneX + 56, HUD_HEIGHT + 46, 68)
   wheelSwatches = buildWheelLayout(width, height)
 }
 
@@ -290,7 +317,7 @@ function buildDefenseNetwork() {
     cols: DEFENSE_STARTING_GRID_SIZE,
     rows: DEFENSE_STARTING_GRID_SIZE,
     cellSize,
-    originX: economyZoneWidth + 48,
+    originX: defenseZoneX + 48,
     originY: HUD_HEIGHT + 110,
   }
   spawnNode = { col: DEFENSE_STARTING_GRID_SIZE - 1, row: 0 }
@@ -558,6 +585,15 @@ function expandGrid() {
 canvas.addEventListener('pointerdown', (e) => {
   const pos = pointerPos(e)
 
+  // Tutorial-Popup blockiert alles andere, solange offen (nur beim allerersten Start).
+  if (welcomeOpen) {
+    if (hitTestReferencePanelClose(width, height, pos.x, pos.y)) {
+      welcomeOpen = false
+      markTutorialSeen()
+    }
+    return
+  }
+
   // Farbwheel-Panel (Munitions-Auswahl) blockiert alle anderen Interaktionen, solange offen.
   if (wheelMode !== 'closed') {
     if (hitTestWheelClose(width, height, pos.x, pos.y)) {
@@ -606,25 +642,23 @@ canvas.addEventListener('pointerdown', (e) => {
     return
   }
 
-  // Türme-Infoseite bzw. der kombinierte Farb-Guide blockieren ebenso alle anderen
-  // Interaktionen, solange offen — reine Anzeige, einziger Klick-Handler ist das Schließen
-  // (beide teilen sich dieselbe Panel-Chrome/Close-Position, siehe referencePanels.ts).
-  if (towersInfoOpen || colorGuideOpen) {
-    if (hitTestReferencePanelClose(width, height, pos.x, pos.y)) {
-      towersInfoOpen = false
-      colorGuideOpen = false
-    }
+  // Türme-Infoseite blockiert ebenso alle anderen Interaktionen, solange offen — reine Anzeige,
+  // einziger Klick-Handler ist das Schließen. Der Farb-Guide dagegen ist NICHT blockierend (siehe
+  // drawMiddleStrip()) — er lebt in seinem eigenen, fest reservierten Feld und lässt beide
+  // Spielseiten währenddessen normal bedienbar, daher hier absichtlich kein eigener Guard.
+  if (towersInfoOpen) {
+    if (hitTestReferencePanelClose(width, height, pos.x, pos.y)) towersInfoOpen = false
+    return
+  }
+
+  if (hitTestHelpToggle(pos.x, pos.y)) {
+    colorGuideOpen = !colorGuideOpen
     return
   }
 
   const button = hudButtons.find((b) => hitTestButton(b, pos.x, pos.y))
   if (button) {
     handleHudButton(button.id)
-    return
-  }
-
-  if (hitTestHelpToggle(pos.x, pos.y)) {
-    colorGuideOpen = true
     return
   }
 
@@ -695,12 +729,13 @@ canvas.addEventListener('pointerdown', (e) => {
 
 canvas.addEventListener('pointermove', (e) => {
   const pos = pointerPos(e)
+  if (welcomeOpen) return
   if (wheelMode !== 'closed') {
     hoveredWheelResourceId = hitTestWheelSwatch(wheelSwatches, pos.x, pos.y)?.resource.id ?? null
     return
   }
   if (infoTarget) return
-  if (towersInfoOpen || colorGuideOpen) return
+  if (towersInfoOpen) return
 
   hoveredEconomyItem = hitTestPalette(paletteItems, pos.x, pos.y)
   hoveredTowerItem = hitTestTowerPalette(towerPaletteItems, pos.x, pos.y)
@@ -898,12 +933,21 @@ window.addEventListener('pointerup', (e) => {
 })
 
 function drawDivider() {
+  // Fest reservierter Streifen zwischen Economy und Defense (siehe MIDDLE_STRIP_WIDTH) — trägt
+  // den Farb-Guide (drawMiddleStrip()) als eigenes Feld statt als blockierendes Popup.
+  ctx!.save()
+  ctx!.fillStyle = '#0b0d12'
+  ctx!.fillRect(economyZoneWidth, HUD_HEIGHT, MIDDLE_STRIP_WIDTH, height - HUD_HEIGHT)
+  ctx!.restore()
+
   ctx!.save()
   ctx!.strokeStyle = COLORS.gridLineStrong
   ctx!.lineWidth = 2
   ctx!.beginPath()
   ctx!.moveTo(economyZoneWidth, HUD_HEIGHT)
   ctx!.lineTo(economyZoneWidth, height)
+  ctx!.moveTo(defenseZoneX, HUD_HEIGHT)
+  ctx!.lineTo(defenseZoneX, height)
   ctx!.stroke()
   ctx!.restore()
 
@@ -911,18 +955,15 @@ function drawDivider() {
   ctx!.fillStyle = COLORS.textDim
   ctx!.font = '12px monospace'
   ctx!.fillText('E C O N O M Y', 24, HUD_HEIGHT + 20)
-  ctx!.fillText('D E F E N S E', economyZoneWidth + 48, HUD_HEIGHT + 20)
+  ctx!.fillText('D E F E N S E', defenseZoneX + 48, HUD_HEIGHT + 20)
   ctx!.restore()
 }
 
 const HELP_TOGGLE_RADIUS = 13
 let helpToggleHovered = false
 
-/** Sitzt direkt auf der Trennlinie zwischen Economy- und Defense-Seite (User-Vorgabe: "zwischen
- * der economy und der defenseseite") — öffnet den kombinierten Farb-Guide (siehe
- * referencePanels.ts drawColorGuidePanel()), der die beiden früheren Bild-Infoseiten ersetzt. */
 function helpToggleCenter(): Point {
-  return { x: economyZoneWidth, y: HUD_HEIGHT + 20 }
+  return { x: economyZoneWidth + MIDDLE_STRIP_WIDTH / 2, y: HUD_HEIGHT + 24 }
 }
 
 function hitTestHelpToggle(x: number, y: number): boolean {
@@ -930,26 +971,33 @@ function hitTestHelpToggle(x: number, y: number): boolean {
   return Math.hypot(c.x - x, c.y - y) <= HELP_TOGGLE_RADIUS + 6
 }
 
-function drawHelpToggle() {
+/** Das feste Feld zwischen Economy und Defense (User-Vorgabe: "als Feld... nicht als Popup") —
+ * der Toggle klappt NUR den Inhalt auf/zu, der Streifen selbst (siehe drawDivider()) ist immer
+ * da. Bewusst NICHT blockierend: beide Spielseiten bleiben klickbar, während der Guide offen ist. */
+function drawMiddleStrip() {
   const c = helpToggleCenter()
-  ctx!.save()
-  ctx!.fillStyle = COLORS.background
-  ctx!.beginPath()
-  ctx!.arc(c.x, c.y, HELP_TOGGLE_RADIUS + 3, 0, Math.PI * 2)
-  ctx!.fill()
-  ctx!.restore()
-
   drawCircleOutline(ctx!, c.x, c.y, HELP_TOGGLE_RADIUS, COLORS.textBright, 1.5, helpToggleHovered ? 12 : 6)
-
   ctx!.save()
   ctx!.textAlign = 'center'
   ctx!.textBaseline = 'middle'
   ctx!.fillStyle = COLORS.textBright
   ctx!.font = 'bold 13px monospace'
-  ctx!.fillText('?', c.x, c.y + 1)
+  ctx!.fillText(colorGuideOpen ? '×' : '?', c.x, c.y + 1)
   ctx!.restore()
 
-  if (helpToggleHovered) drawLabel(ctx!, 'Color Guide — mixing & effects', c.x, c.y - HELP_TOGGLE_RADIUS - 12, '11px monospace', COLORS.textBright, 15)
+  ctx!.save()
+  ctx!.textAlign = 'center'
+  ctx!.fillStyle = COLORS.textDim
+  ctx!.font = '10px monospace'
+  ctx!.fillText('COLOR GUIDE', c.x, c.y + HELP_TOGGLE_RADIUS + 14)
+  ctx!.restore()
+
+  const listTop = c.y + HELP_TOGGLE_RADIUS + 26
+  if (colorGuideOpen) {
+    drawColorGuideList(ctx!, economyZoneWidth + 12, listTop, MIDDLE_STRIP_WIDTH - 24, height - listTop - 12)
+  } else if (helpToggleHovered) {
+    drawLabel(ctx!, 'Click to open', c.x, c.y - HELP_TOGGLE_RADIUS - 12, '11px monospace', COLORS.textBright, 15)
+  }
 }
 
 function drawEconomyPalette() {
@@ -973,7 +1021,7 @@ function drawPaletteTooltips() {
   // Sobald ein Modal offen ist, aktualisiert pointermove hoveredEconomyItem/hoveredTowerItem
   // nicht mehr (siehe early returns dort) — ohne diese Sperre würde sonst ein stehen gebliebenes
   // Tooltip vom Icon-Klick, der das Modal gerade erst geöffnet hat, sichtbar bleiben.
-  if (wheelMode !== 'closed' || infoTarget || towersInfoOpen || colorGuideOpen) return
+  if (welcomeOpen || wheelMode !== 'closed' || infoTarget || towersInfoOpen) return
   if (hoveredEconomyItem) {
     const item = hoveredEconomyItem
     drawLabel(ctx!, paletteItemDescription(item.kind), item.x, item.y - item.radius - 14, '11px monospace', COLORS.textBright, 15)
@@ -1454,7 +1502,7 @@ function render(_dt: number) {
   ctx!.fillRect(0, 0, width, height)
 
   drawDivider()
-  drawHelpToggle()
+  drawMiddleStrip()
   drawEconomyPalette()
   drawBuildings()
   drawTowerPalette()
@@ -1475,9 +1523,10 @@ function render(_dt: number) {
   }
 
   if (towersInfoOpen) drawTowerReferencePanel(ctx!, width, height)
-  else if (colorGuideOpen) drawColorGuidePanel(ctx!, width, height)
 
   drawInfoPanel()
+
+  if (welcomeOpen) drawWelcomePanel(ctx!, width, height)
 }
 
 startGameLoop({ economyTick, combatTick, render })
