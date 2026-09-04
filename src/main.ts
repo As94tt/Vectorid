@@ -19,7 +19,7 @@ import {
   type Mirror,
   type Prism,
 } from './economy/buildings'
-import { simulateLight, type PrismStatus, type SimulationResult } from './economy/lightSimulation'
+import { simulateLight, type SimulationResult } from './economy/lightSimulation'
 import {
   cellAtPoint,
   cellCenter,
@@ -79,7 +79,7 @@ import {
 import { getEffectiveTowerStats, createTower, getTowerDefinition, towerUpgradeCost, TOWER_MAX_LEVEL, type PlacedTower, type TowerKind } from './towerdefense/towers'
 import { getResource, RESOURCES } from './data/resources'
 import { drawCircleOutline, drawHexagon, drawLabel } from './render/shapes'
-import { drawPath, type Point } from './towerdefense/path'
+import { drawPath, pathTotalLength, type Point } from './towerdefense/path'
 import { updateProjectiles, updateTowers, pruneVisualEffects, type Projectile, type VisualEffect } from './towerdefense/combat'
 import { pruneEnemies, tickEnemy, type Enemy } from './towerdefense/enemies'
 import { createWaveState, isBossWave, registerLeak, tickWaveSpawning, BOSS_LUMEN_MULTIPLIER, type WaveState } from './towerdefense/waves'
@@ -276,6 +276,9 @@ let spawnNode: GridCoord
 let spawnDirection: HexDirection = 0
 let defenseMirrors: Mirror[] = []
 let enemyPathPixels: Point[] = []
+/** Gesamtlänge des aktuellen Pfads in Pixeln — cached, damit tickEnemy() nicht jeden Frame für
+ * jeden Gegner neu über den ganzen Pfad summieren muss (siehe recomputeEnemyPath()). */
+let enemyPathLength = 0
 /** Id des Turms, an dem der aktuelle Gegner-Pfad endet — `null`, wenn er stattdessen am
  * Rasterrand endet (noch kein Turm im Weg). */
 let pathTargetTowerId: string | null = null
@@ -293,6 +296,7 @@ function recomputeEnemyPath() {
   const maxSteps = (defenseGrid.cols + defenseGrid.rows) * 4 // Sicherheitsbremse gg. Spiegel-Endlosschleife
   const { cells, hitTowerId } = traceDefensePath(defenseGrid, lookup, spawnNode, spawnDirection, maxSteps)
   enemyPathPixels = cells.map((c) => cellCenter(defenseGrid, c))
+  enemyPathLength = pathTotalLength(enemyPathPixels)
   pathTargetTowerId = hitTowerId
 }
 
@@ -403,25 +407,6 @@ function hitTestEconomyBuilding(x: number, y: number): EconomyHit | null {
     if (Math.hypot(buildingCenter(container).x - x, buildingCenter(container).y - y) <= containerRadius(container) + 6) return { kind: 'container', id: container.id }
   }
   return null
-}
-
-/** Kleines Stärke-Label unterhalb jedes Prismas (User-Vorgabe: Prismen haben kein Level mehr, ihre
- * Ausgabe-"Stärke" ergibt sich stattdessen live aus den ankommenden Strahlen, siehe
- * lightSimulation.ts) — rein informativ, nicht klickbar (kein Level-Up mehr nötig). */
-function prismStrengthLabelCenter(prism: Prism): Point {
-  const center = buildingCenter(prism)
-  return { x: center.x, y: center.y + prismSize(prism) + 14 }
-}
-
-function drawPrismStrengthLabel(prism: Prism, status: PrismStatus) {
-  if (!status.output) return
-  const { x, y } = prismStrengthLabelCenter(prism)
-  ctx!.save()
-  ctx!.textAlign = 'center'
-  ctx!.font = '10px monospace'
-  ctx!.fillStyle = COLORS.textMid
-  ctx!.fillText(`Strength ${status.strength}`, x, y)
-  ctx!.restore()
 }
 
 function towerCenter(tower: PlacedTower) {
@@ -1392,10 +1377,7 @@ function drawBuildings() {
   for (const mirror of mirrors) drawMirrorEntity(ctx!, mirror, buildingCenter(mirror), placementGrid.cellSize)
   for (const prism of prisms) {
     const status = lightSimulation.prismStatus.get(prism.id)
-    if (status) {
-      drawPrismEntity(ctx!, prism, buildingCenter(prism), status, elapsedSeconds)
-      drawPrismStrengthLabel(prism, status)
-    }
+    if (status) drawPrismEntity(ctx!, prism, buildingCenter(prism), status, elapsedSeconds)
   }
   for (const container of containers) {
     const rates = lightSimulation.containerRates.get(container.id)
@@ -1455,7 +1437,7 @@ function combatTick(dt: number) {
 
   tickWaveSpawning(waveState, dt, enemies)
 
-  for (const enemy of enemies) tickEnemy(enemy, dt, elapsedSeconds)
+  for (const enemy of enemies) tickEnemy(enemy, dt, elapsedSeconds, enemyPathLength)
 
   updateTowers(towers, enemies, dt, elapsedSeconds, enemyPathPixels, towerCenter, hasAmmoAvailable, projectiles, visualEffects)
   projectiles = updateProjectiles(projectiles, enemies, dt, elapsedSeconds, enemyPathPixels, visualEffects)

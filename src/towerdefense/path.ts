@@ -24,6 +24,13 @@ function segmentLengths(path: Point[]) {
   return lengths
 }
 
+/** Gesamtlänge des Pfads in Pixeln — braucht `tickEnemy()` (siehe enemies.ts), um aus einer
+ * festen Pixel/Sekunde-Geschwindigkeit den richtigen `progress`-Zuwachs pro Frame zu berechnen
+ * (User-Vorgabe: Geschwindigkeit soll NICHT von der Weglänge abhängen, siehe dort). */
+export function pathTotalLength(path: Point[]): number {
+  return segmentLengths(path).reduce((sum, l) => sum + l, 0)
+}
+
 /** Liefert die Position entlang des Pfads bei Fortschritt t (0 = Spawn, 1 = Basis). */
 export function getPointAtProgress(path: Point[], t: number): Point {
   const clamped = Math.max(0, Math.min(1, t))

@@ -21,7 +21,7 @@ const HP_GROWTH_PER_WAVE = 0.12
 const BASE_ARMOR = 0.1
 const ARMOR_GROWTH_PER_WAVE = 0.008
 const MAX_ARMOR = 0.6
-const BASE_SPEED = 0.09
+const BASE_SPEED = 28 // Pixel/Sekunde (siehe enemies.ts Enemy.baseSpeed) — Platzhalter-Balancing.
 const SPEED_GROWTH_PER_WAVE = 0.01
 const MAX_SPEED_MULTIPLIER = 2
 

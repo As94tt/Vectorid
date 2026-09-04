@@ -98,9 +98,6 @@ export interface PrismStatus {
    * automatisch abgeleitete freie Ecke (siehe `deriveTriangleOutputDirection()`), bei Hexagonen
    * unverändert `prism.outputDirection`. */
   outputDirection: HexDirection
-  /** Gerundeter Durchschnitt der Stärke aller ankommenden Strahlen (siehe `tracePass()`) — so viele
-   * Zellen reicht die eigene Ausgabe noch weiter, 0 wenn (noch) kein Strahl ankommt. */
-  strength: number
 }
 
 export interface SimulationResult {
@@ -274,6 +271,17 @@ function traceAllFronts(grid: PlacementGrid, lookup: Map<string, EconomyBuilding
         continue
       }
       if (occupant.kind === 'prism') {
+        // Dreieck: nur die 2 Ecken NEBEN dem Output nehmen überhaupt Eingänge an (siehe
+        // isTriangleCorner()) — trifft der Strahl stattdessen eine der 3 flachen Seiten, landet er
+        // NICHT im Prisma (User-Vorgabe: sichtbar machen, dass er dort nicht ankommt) — er bricht
+        // schon in der Zelle DAVOR ab, statt (wie bei einem gültigen Treffer) noch bis ins Prisma
+        // selbst zu ziehen. Da Segmente ohnehin nur Zellmittelpunkte verbinden, genügt es, `next`
+        // hier NICHT anzuhängen: der Pfad endet dann exakt am Mittelpunkt der letzten Zelle davor.
+        const side = oppositeDirection(front.direction)
+        if (occupant.prismKind === 'triangle' && !isTriangleCorner(occupant.outputDirection, side)) {
+          front.alive = false
+          continue
+        }
         front.cells.push(next)
         front.alive = false
         front.reachedEndpoint = true
@@ -377,15 +385,11 @@ function tracePass(
     // `travelDirection` ist die Richtung, in die der Strahl unterwegs war, als er die Zelle
     // erreichte — die tatsächlich berührte Seite des Prismas ist die ENTGEGENGESETZTE Richtung
     // (der Strahl kommt aus dem Nachbarn, der von hier aus in `travelDirection` liegt, also liegt
-    // er selbst aus Prisma-Sicht in der Gegenrichtung). Wichtig für die neue Dreieck-Ecken-Regel
-    // unten: die muss an der ECHTEN, sichtbaren Seite prüfen, nicht an der Lauf-Richtung.
+    // er selbst aus Prisma-Sicht in der Gegenrichtung). Ein Dreieck-Treffer an einer der 3 flachen
+    // Seiten erreicht `registerHit()` gar nicht erst — `traceAllFronts()` lässt einen solchen
+    // Strahl schon in der Zelle DAVOR abbrechen (siehe dort), hier zählt also immer eine der 3
+    // echten Ecken.
     const side = oppositeDirection(travelDirection)
-
-    // Beim Dreieck zählt JEDE der 3 Ecken als potenzieller Eingang (welche davon am Ende
-    // tatsächlich Output wird, entscheidet sich erst NACH dem Durchlauf, siehe
-    // `deriveTriangleOutputDirection()` in simulateLight()) — nur die 3 "Seiten"-Richtungen
-    // werden hier schon ausgeschlossen.
-    if (prism.prismKind === 'triangle' && !isTriangleCorner(prism.outputDirection, side)) return
 
     if (isRawSource) {
       const counts = prismCounts.get(prism.id) ?? { c: 0, m: 0, y: 0 }
@@ -508,7 +512,6 @@ export function simulateLight(grid: PlacementGrid, sources: LightSource[], mirro
       sides: pass.prismSides.get(prism.id) ?? new Set(),
       output: prismOutputs.get(prism.id) ?? null,
       outputDirection: emitDirections.get(prism.id) ?? prism.outputDirection,
-      strength: pass.prismAvgStrength.get(prism.id) ?? 0,
     })
   }
 

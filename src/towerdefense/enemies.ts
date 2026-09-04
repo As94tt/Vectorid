@@ -75,7 +75,10 @@ export interface Enemy {
   armor: number
   /** 0 (Spawn) bis 1 (Ziel erreicht), Position wird daraus abgeleitet. */
   progress: number
-  /** Fortschritt/Sekunde ohne Verlangsamung. */
+  /** Pixel/Sekunde ohne Verlangsamung (User-Vorgabe: feste, von der Weglänge UNABHÄNGIGE
+   * Geschwindigkeit — siehe `tickEnemy()`, das daraus je nach aktueller Pfadlänge den passenden
+   * `progress`-Zuwachs pro Frame berechnet, statt `progress` direkt in fixen Bruchteilen/Sekunde
+   * zu erhöhen wie zuvor). */
   baseSpeed: number
   /** Render-Radius in Pixeln (siehe render/combatRender.ts) — Bosse (siehe towerdefense/
    * waves.ts) sind deutlich größer als normale Gegner. */
@@ -122,7 +125,7 @@ export interface CreateEnemyOptions {
 
 let enemyCounter = 0
 export function createEnemy(options: CreateEnemyOptions = {}): Enemy {
-  const { hp = 30, baseSpeed = 0.09, armor = 0.1, size = ENEMY_BASE_SIZE, isBoss = false } = options
+  const { hp = 30, baseSpeed = 28, armor = 0.1, size = ENEMY_BASE_SIZE, isBoss = false } = options
   enemyCounter += 1
   return {
     id: `enemy-${enemyCounter}`,
@@ -167,9 +170,15 @@ export function dealDamage(enemy: Enemy, rawDamage: number) {
 }
 
 /** Pro Frame: Bewegung (abzüglich Slow/Freeze) + Stack-Verfall (Blue/Red/Green je 1/Sekunde,
- * Black gemeinsam nach 5s) + laufender DoT-Schaden (Red-Burn/Green-Poison). */
-export function tickEnemy(enemy: Enemy, dt: number, elapsedSeconds: number) {
-  enemy.progress += enemy.baseSpeed * speedFactor(enemy, elapsedSeconds) * dt
+ * Black gemeinsam nach 5s) + laufender DoT-Schaden (Red-Burn/Green-Poison). `pathLengthPixels`
+ * (siehe towerdefense/path.ts `pathTotalLength()`) rechnet die feste Pixel/Sekunde-Geschwindigkeit
+ * in den richtigen `progress`-Zuwachs für den AKTUELLEN Pfad um — dieselbe reale Geschwindigkeit
+ * ergibt auf einem längeren Pfad also einen kleineren Fortschritts-Zuwachs pro Sekunde (User-
+ * Vorgabe: Geschwindigkeit darf nicht von der Weglänge abhängen). */
+export function tickEnemy(enemy: Enemy, dt: number, elapsedSeconds: number, pathLengthPixels: number) {
+  if (pathLengthPixels > 0) {
+    enemy.progress += ((enemy.baseSpeed * speedFactor(enemy, elapsedSeconds) * dt) / pathLengthPixels)
+  }
 
   enemy.blueStacks = Math.max(0, enemy.blueStacks - STACK_DECAY_PER_SECOND * dt)
   enemy.redStacks = Math.max(0, enemy.redStacks - STACK_DECAY_PER_SECOND * dt)
