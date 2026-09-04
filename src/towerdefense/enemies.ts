@@ -77,6 +77,12 @@ export interface Enemy {
   progress: number
   /** Fortschritt/Sekunde ohne Verlangsamung. */
   baseSpeed: number
+  /** Render-Radius in Pixeln (siehe render/combatRender.ts) — Bosse (siehe towerdefense/
+   * waves.ts) sind deutlich größer als normale Gegner. */
+  size: number
+  /** Boss-Welle (siehe waves.ts BOSS_WAVE_INTERVAL) — steuert Rendering (Warn-Ring) und
+   * Lumen-Belohnung (siehe main.ts). */
+  isBoss: boolean
 
   // Tier 1 — kein Stack, nur ein kurzzeitiger Effekt-Zeitstempel (Cyan).
   cyanSlowUntil: number
@@ -104,8 +110,19 @@ export interface Enemy {
   blackStacksExpireAt: number
 }
 
+export const ENEMY_BASE_SIZE = 9
+
+export interface CreateEnemyOptions {
+  hp?: number
+  baseSpeed?: number
+  armor?: number
+  size?: number
+  isBoss?: boolean
+}
+
 let enemyCounter = 0
-export function createEnemy(hp = 30, baseSpeed = 0.09, armor = 0.1): Enemy {
+export function createEnemy(options: CreateEnemyOptions = {}): Enemy {
+  const { hp = 30, baseSpeed = 0.09, armor = 0.1, size = ENEMY_BASE_SIZE, isBoss = false } = options
   enemyCounter += 1
   return {
     id: `enemy-${enemyCounter}`,
@@ -114,6 +131,8 @@ export function createEnemy(hp = 30, baseSpeed = 0.09, armor = 0.1): Enemy {
     armor,
     progress: 0,
     baseSpeed,
+    size,
+    isBoss,
     cyanSlowUntil: 0,
     blueStacks: 0,
     redStacks: 0,

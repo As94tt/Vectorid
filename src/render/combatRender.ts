@@ -12,7 +12,6 @@ import { getTowerDefinition, type PlacedTower } from '../towerdefense/towers'
 import { drawCircle, drawCircleOutline } from './shapes'
 import { TOWER_UNSELECTED_COLOR } from './towerRender'
 
-const ENEMY_RADIUS = 9
 const HEALTH_BAR_WIDTH = 20
 const HEALTH_BAR_HEIGHT = 3
 const STATUS_BAR_WIDTH = 3
@@ -28,7 +27,7 @@ function drawStatusEffects(ctx: CanvasRenderingContext2D, pos: Point, enemy: Ene
   if (active.length === 0) return
   const totalWidth = active.length * STATUS_BAR_WIDTH + (active.length - 1) * STATUS_BAR_GAP
   const startX = pos.x - totalWidth / 2
-  const baseY = pos.y + ENEMY_RADIUS + 4 + STATUS_BAR_MAX_HEIGHT
+  const baseY = pos.y + enemy.size + 4 + STATUS_BAR_MAX_HEIGHT
 
   ctx.save()
   active.forEach((status, i) => {
@@ -40,27 +39,30 @@ function drawStatusEffects(ctx: CanvasRenderingContext2D, pos: Point, enemy: Ene
   ctx.restore()
 }
 
-function drawHealthBar(ctx: CanvasRenderingContext2D, pos: Point, fraction: number) {
-  const x = pos.x - HEALTH_BAR_WIDTH / 2
-  const y = pos.y - ENEMY_RADIUS - 10
+function drawHealthBar(ctx: CanvasRenderingContext2D, pos: Point, radius: number, fraction: number) {
+  const width = Math.max(HEALTH_BAR_WIDTH, radius * 2.2)
+  const x = pos.x - width / 2
+  const y = pos.y - radius - 10
   const clamped = Math.max(0, Math.min(1, fraction))
   ctx.save()
   ctx.fillStyle = 'rgba(0, 0, 0, 0.5)'
-  ctx.fillRect(x, y, HEALTH_BAR_WIDTH, HEALTH_BAR_HEIGHT)
+  ctx.fillRect(x, y, width, HEALTH_BAR_HEIGHT)
   ctx.fillStyle = clamped > 0.5 ? '#39ff8f' : clamped > 0.25 ? '#ffcc33' : '#ff3355'
-  ctx.fillRect(x, y, HEALTH_BAR_WIDTH * clamped, HEALTH_BAR_HEIGHT)
+  ctx.fillRect(x, y, width * clamped, HEALTH_BAR_HEIGHT)
   ctx.restore()
 }
 
 const FROZEN_COLOR = '#00AAFF' // Cerulean-Farbton, dieselbe Farbe wie der auslösende Effekt
+const BOSS_RING_COLOR = '#ffcc33' // deutlich sichtbarer Warn-Ring, unabhängig vom Frozen-Zustand
 
 export function drawEnemies(ctx: CanvasRenderingContext2D, enemies: Enemy[], pathPixels: Point[], elapsedSeconds: number) {
   for (const enemy of enemies) {
     const pos = getPointAtProgress(pathPixels, enemy.progress)
     const frozen = enemy.frozenUntil > elapsedSeconds
-    drawCircle(ctx, pos.x, pos.y, ENEMY_RADIUS, frozen ? FROZEN_COLOR : COLORS.enemy, frozen ? 16 : 10)
-    if (frozen) drawCircleOutline(ctx, pos.x, pos.y, ENEMY_RADIUS + 3, FROZEN_COLOR, 1.5, 10)
-    drawHealthBar(ctx, pos, enemy.hp / enemy.maxHp)
+    drawCircle(ctx, pos.x, pos.y, enemy.size, frozen ? FROZEN_COLOR : COLORS.enemy, frozen ? 16 : enemy.isBoss ? 18 : 10)
+    if (enemy.isBoss) drawCircleOutline(ctx, pos.x, pos.y, enemy.size + 4, BOSS_RING_COLOR, 2, 12)
+    if (frozen) drawCircleOutline(ctx, pos.x, pos.y, enemy.size + 3, FROZEN_COLOR, 1.5, 10)
+    drawHealthBar(ctx, pos, enemy.size, enemy.hp / enemy.maxHp)
     drawStatusEffects(ctx, pos, enemy, elapsedSeconds)
   }
 }

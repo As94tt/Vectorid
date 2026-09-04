@@ -79,7 +79,8 @@ import { getResource, RESOURCES } from './data/resources'
 import { drawHexagon, drawLabel } from './render/shapes'
 import { drawPath, type Point } from './towerdefense/path'
 import { updateProjectiles, updateTowers, pruneVisualEffects, type Projectile, type VisualEffect } from './towerdefense/combat'
-import { createEnemy, pruneEnemies, tickEnemy, type Enemy } from './towerdefense/enemies'
+import { pruneEnemies, tickEnemy, type Enemy } from './towerdefense/enemies'
+import { createWaveState, isBossWave, registerLeak, tickWaveSpawning, BOSS_LUMEN_MULTIPLIER, type WaveState } from './towerdefense/waves'
 import { drawEnemies, drawProjectiles, drawTowerCombatEffects, drawVisualEffects } from './render/combatRender'
 import { drawTowerReferencePanel, hitTestReferencePanelClose } from './render/referencePanels'
 
@@ -295,6 +296,8 @@ function buildDefenseNetwork() {
   spawnDirection = 3 // zeigt zu Beginn ins Rasterinnere (Spawn sitzt oben-rechts)
   defenseMirrors = []
   towers = []
+  enemies = []
+  waveState = createWaveState()
   rebuildDefenseOccupancy()
   recomputeEnemyPath()
   defenseReady = true
@@ -312,16 +315,16 @@ function expandDefenseGrid() {
   recomputeEnemyPath()
 }
 
-// Kampf-Simulation (Defense-Seite): Gegner spawnen fortlaufend (sehr häufiges Intervall zum
-// Testen der Türme — noch kein echtes Wellen-/Boss-System), Türme feuern automatisch auf
-// Gegner in Reichweite (siehe towerdefense/combat.ts). Munition liefert dabei nur noch C/M/Y
-// (siehe towerdefense/ammoEffects.ts) — Statuseffekte entstehen aus dem angesammelten
-// Mischungsverhältnis der Gegner selbst (siehe towerdefense/enemies.ts).
+// Kampf-Simulation (Defense-Seite): Gegner spawnen wellenweise (siehe towerdefense/waves.ts —
+// 20 Gegner/Welle, 5s Pause danach, jede Welle stärker, Boss alle 10 Wellen, Fehlschlag setzt
+// 5 Wellen zurück), Türme feuern automatisch auf Gegner in Reichweite (siehe towerdefense/
+// combat.ts). Munition liefert dabei nur noch C/M/Y (siehe towerdefense/ammoEffects.ts) —
+// Statuseffekte entstehen aus dem angesammelten Mischungsverhältnis der Gegner selbst (siehe
+// towerdefense/enemies.ts).
 let enemies: Enemy[] = []
 let projectiles: Projectile[] = []
 let visualEffects: VisualEffect[] = []
-let enemySpawnTimer = 0
-const ENEMY_SPAWN_INTERVAL = 0.6
+let waveState: WaveState = createWaveState()
 const LUMEN_PER_KILL = 2
 
 function resize() {
@@ -1004,6 +1007,21 @@ function drawDefenseNetwork() {
   for (const mirror of defenseMirrors) drawMirrorEntity(ctx!, mirror, defenseMirrorCenter(mirror), defenseGrid.cellSize)
 }
 
+/** Wellenstand rechts neben dem "D E F E N S E"-Label (siehe towerdefense/waves.ts) — Wellen-
+ * nummer + Boss-Hinweis (jede 10. Welle) plus Spawn-Fortschritt bzw. Pause-Countdown. */
+function drawWaveStatus() {
+  const boss = isBossWave(waveState.currentWave)
+  const status =
+    waveState.phase === 'spawning' ? `${waveState.enemiesSpawnedInWave}/${waveState.totalInWave} spawned` : `next wave in ${Math.ceil(waveState.pauseTimer)}s`
+
+  ctx!.save()
+  ctx!.textAlign = 'right'
+  ctx!.font = 'bold 12px monospace'
+  ctx!.fillStyle = boss ? '#ffcc33' : COLORS.textBright
+  ctx!.fillText(boss ? `WAVE ${waveState.currentWave} — BOSS  ·  ${status}` : `WAVE ${waveState.currentWave}  ·  ${status}`, width - 20, HUD_HEIGHT + 20)
+  ctx!.restore()
+}
+
 /** Layout + Zeichnen des Info-Panels für das aktuell angeklickte Gebäude/den Turm. Legt
  * `infoPanelLayout` fest, damit pointerdown dieselben Koordinaten fürs Hit-Testing nutzt. */
 function drawInfoPanel() {
@@ -1376,11 +1394,7 @@ function economyTick(dt: number) {
 function combatTick(dt: number) {
   if (!defenseReady) return
 
-  enemySpawnTimer -= dt
-  if (enemySpawnTimer <= 0) {
-    enemies.push(createEnemy())
-    enemySpawnTimer = ENEMY_SPAWN_INTERVAL
-  }
+  tickWaveSpawning(waveState, dt, enemies)
 
   for (const enemy of enemies) tickEnemy(enemy, dt, elapsedSeconds)
 
@@ -1388,9 +1402,16 @@ function combatTick(dt: number) {
   projectiles = updateProjectiles(projectiles, enemies, dt, elapsedSeconds, enemyPathPixels, visualEffects)
   visualEffects = pruneVisualEffects(visualEffects, elapsedSeconds)
 
-  const { remaining, killed } = pruneEnemies(enemies)
+  const { remaining, killed, arrived } = pruneEnemies(enemies)
   enemies = remaining
-  if (killed.length > 0) addToInventory(inventory, 'lumen', killed.length * LUMEN_PER_KILL)
+  if (killed.length > 0) {
+    const lumen = killed.reduce((sum, e) => sum + LUMEN_PER_KILL * (e.isBoss ? BOSS_LUMEN_MULTIPLIER : 1), 0)
+    addToInventory(inventory, 'lumen', lumen)
+  }
+  // Jeder durchgekommene Gegner markiert die aktuelle Welle als nicht geschafft (siehe
+  // towerdefense/waves.ts tickWaveSpawning()) — die nächste Welle springt dann 5 zurück statt
+  // vorwärtszugehen.
+  for (let i = 0; i < arrived.length; i++) registerLeak(waveState)
 }
 
 function render(_dt: number) {
@@ -1402,6 +1423,7 @@ function render(_dt: number) {
   drawBuildings()
   drawTowerPalette()
   drawPaletteTooltips()
+  drawWaveStatus()
   drawDefenseNetwork()
   drawTowers()
   drawTowerCombatEffects(ctx!, towers, enemies, enemyPathPixels, towerCenter)
