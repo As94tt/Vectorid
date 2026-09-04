@@ -1,0 +1,149 @@
+import { COLORS } from '../constants/colors'
+import { RESOURCES } from '../data/resources'
+import { getBalance, type Inventory } from '../economy/inventory'
+
+// Globales Info-Feld über Economy + Defense: Spielername/Level, vorhandene Ressourcen,
+// Einstellungen/Speichern (noch ohne Funktion) und ein Cheat-Button (+10 auf alles).
+// Komplett Canvas-gezeichnet, damit dieselbe Pointer-Event-Interaktion wie im Rest des
+// Spiels genutzt werden kann (kein Mischen von DOM-Buttons und Canvas-Dragging).
+
+export const HUD_HEIGHT = 52
+
+export interface HudButton {
+  id: 'settings' | 'save' | 'cheat' | 'demolish'
+  label: string
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export function buildHudButtons(canvasWidth: number): HudButton[] {
+  const width = 110
+  const height = 30
+  const y = (HUD_HEIGHT - height) / 2
+  const gap = 10
+  const rightPadding = 16
+  // "ABRISS" steht bewusst GANZ links in dieser Reihe (letzter Eintrag -> kleinstes x, siehe
+  // Positionsformel unten) — im HUD statt in einer der beiden Kauf-Leisten, die schon eng
+  // gepackt sind (10/12 Icons, siehe CLAUDE.md), UND weil der Modus für BEIDE Seiten gleichzeitig
+  // gilt (Economy-Gebäude UND Türme), nicht nur für eine.
+  const order: { id: HudButton['id']; label: string }[] = [
+    { id: 'settings', label: 'EINSTELLUNGEN' },
+    { id: 'save', label: 'SPEICHERN' },
+    { id: 'cheat', label: 'CHEAT +10' },
+    { id: 'demolish', label: 'ABRISS' },
+  ]
+  return order.map((o, i) => ({
+    ...o,
+    width,
+    height,
+    y,
+    x: canvasWidth - rightPadding - (i + 1) * width - i * gap,
+  }))
+}
+
+export function hitTestButton(button: { x: number; y: number; width: number; height: number }, x: number, y: number): boolean {
+  return x >= button.x && x <= button.x + button.width && y >= button.y && y <= button.y + button.height
+}
+
+function drawButton(ctx: CanvasRenderingContext2D, button: HudButton, active: boolean) {
+  const color = active ? '#ff3355' : COLORS.textBright
+  ctx.save()
+  ctx.strokeStyle = color
+  ctx.lineWidth = 1.5
+  ctx.strokeRect(button.x, button.y, button.width, button.height)
+  ctx.fillStyle = color
+  ctx.font = '11px monospace'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText(active ? 'ABRISS: AN' : button.label, button.x + button.width / 2, button.y + button.height / 2 + 1)
+  ctx.restore()
+}
+
+/**
+ * Farbressourcen (Tier 1-3) zeigen ihre aktuelle Produktionsrate statt der aufgelaufenen
+ * Menge (User-Wunsch: "wie viel die Rate ist, z. B. 5/s"). Lumen/Prisma sind Spezial-/
+ * Kampf-Ressourcen ohne laufende Produktion — die bleiben als Bestand (Kontostand fürs
+ * Bezahlen von Käufen), eine Rate wäre dort aktuell immer 0 und damit nutzlos.
+ */
+function resourceLabel(inventory: Inventory, rates: Map<string, number>, resourceId: string, isSpecial: boolean): string {
+  if (isSpecial) return Math.floor(getBalance(inventory, resourceId)).toString()
+  return `${(rates.get(resourceId) ?? 0).toFixed(1)}/s`
+}
+
+export function drawHud(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  inventory: Inventory,
+  rates: Map<string, number>,
+  playerName: string,
+  level: number,
+  buttons: HudButton[],
+  demolishActive: boolean,
+) {
+  ctx.save()
+  ctx.fillStyle = COLORS.background
+  ctx.fillRect(0, 0, width, HUD_HEIGHT)
+  ctx.strokeStyle = COLORS.gridLineStrong
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  ctx.moveTo(0, HUD_HEIGHT)
+  ctx.lineTo(width, HUD_HEIGHT)
+  ctx.stroke()
+  ctx.restore()
+
+  const midY = HUD_HEIGHT / 2
+
+  ctx.save()
+  ctx.textBaseline = 'middle'
+  ctx.fillStyle = COLORS.textBright
+  ctx.font = 'bold 13px monospace'
+  ctx.fillText(playerName, 20, midY)
+  ctx.fillStyle = COLORS.textDim
+  ctx.font = '11px monospace'
+  ctx.fillText(`LVL ${level}`, 20 + ctx.measureText(playerName).width + 16, midY)
+  ctx.restore()
+
+  // Ressourcenliste ist auf den Bereich links der Buttons begrenzt (clip), sonst würde eine
+  // lange Liste (z. B. nach dem Cheat, wenn alle ~24 Ressourcen > 0 sind) in die Buttons laufen.
+  const leftmostButtonX = buttons.reduce((min, b) => Math.min(min, b.x), width)
+  const maxX = leftmostButtonX - 20
+
+  const visible = RESOURCES.filter((r) => (r.tier === 'special' ? getBalance(inventory, r.id) > 0 : (rates.get(r.id) ?? 0) > 0))
+
+  ctx.save()
+  ctx.beginPath()
+  ctx.rect(210, 0, Math.max(0, maxX - 210), HUD_HEIGHT)
+  ctx.clip()
+  ctx.textBaseline = 'middle'
+  ctx.font = '11px monospace'
+  let cursor = 220
+  let shown = 0
+  for (const resource of visible) {
+    const label = resourceLabel(inventory, rates, resource.id, resource.tier === 'special')
+    const entryWidth = 11 + ctx.measureText(label).width + 18
+    if (cursor + entryWidth > maxX) break
+    ctx.fillStyle = resource.color
+    ctx.beginPath()
+    ctx.arc(cursor, midY, 5, 0, Math.PI * 2)
+    ctx.fill()
+    cursor += 11
+    ctx.fillStyle = COLORS.textDim
+    ctx.fillText(label, cursor, midY)
+    cursor += ctx.measureText(label).width + 18
+    shown++
+  }
+  ctx.restore()
+
+  if (shown < visible.length) {
+    ctx.save()
+    ctx.textBaseline = 'middle'
+    ctx.font = '11px monospace'
+    ctx.fillStyle = COLORS.textDim
+    ctx.fillText(`+${visible.length - shown}`, maxX + 4, midY)
+    ctx.restore()
+  }
+
+  for (const button of buttons) drawButton(ctx, button, button.id === 'demolish' && demolishActive)
+}

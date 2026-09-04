@@ -1,0 +1,21 @@
+{
+  "name": "vectoid",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "puppeteer": "^25.3.0",
+    "typescript": "^5.7.3",
+    "vite": "^7.3.1"
+  },
+  "allowScripts": {
+    "puppeteer@25.9.0": true,
+    "esbuild@0.28.2": true
+  }
+}
