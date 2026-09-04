@@ -10,19 +10,16 @@ import {
   createPrism,
   GENERATOR_MAX_LEVEL,
   generatorUpgradeCost,
-  PRISM_MAX_LEVEL,
-  prismUpgradeCost,
   rotateMirror,
   rotatePrism,
   upgradeContainer,
   upgradeLightSource,
-  upgradePrism,
   type Container,
   type LightSource,
   type Mirror,
   type Prism,
 } from './economy/buildings'
-import { simulateLight, type SimulationResult } from './economy/lightSimulation'
+import { simulateLight, type PrismStatus, type SimulationResult } from './economy/lightSimulation'
 import {
   cellAtPoint,
   cellCenter,
@@ -55,7 +52,6 @@ import {
   drawPrismEntity,
   hitTestPalette,
   isContainerMaxed,
-  isPrismMaxed,
   isSourceMaxed,
   paletteItemDescription,
   prismSize,
@@ -409,38 +405,22 @@ function hitTestEconomyBuilding(x: number, y: number): EconomyHit | null {
   return null
 }
 
-const PRISM_LEVEL_BADGE_RADIUS = 10
-
-function prismLevelBadgeCenter(prism: Prism): Point {
+/** Kleines Stärke-Label unterhalb jedes Prismas (User-Vorgabe: Prismen haben kein Level mehr, ihre
+ * Ausgabe-"Stärke" ergibt sich stattdessen live aus den ankommenden Strahlen, siehe
+ * lightSimulation.ts) — rein informativ, nicht klickbar (kein Level-Up mehr nötig). */
+function prismStrengthLabelCenter(prism: Prism): Point {
   const center = buildingCenter(prism)
   return { x: center.x, y: center.y + prismSize(prism) + 14 }
 }
 
-/** Kleiner "Lv.N"-Badge unterhalb jedes Prismas, eigens hit-getestet (siehe attemptPrismLevelUp())
- * — bewusst NICHT Teil von hitTestEconomyBuilding(), damit ein Klick aufs Prisma selbst weiterhin
- * nur dreht (siehe pendingPress-Logik), ohne mit dem Level-Up in Konflikt zu geraten. */
-function hitTestPrismLevelBadge(x: number, y: number): Prism | null {
-  for (const prism of prisms) {
-    const badge = prismLevelBadgeCenter(prism)
-    if (Math.hypot(badge.x - x, badge.y - y) <= PRISM_LEVEL_BADGE_RADIUS) return prism
-  }
-  return null
-}
-
-function drawPrismLevelBadge(prism: Prism) {
-  const { x, y } = prismLevelBadgeCenter(prism)
-  const maxed = prism.level >= PRISM_MAX_LEVEL
+function drawPrismStrengthLabel(prism: Prism, status: PrismStatus) {
+  if (!status.output) return
+  const { x, y } = prismStrengthLabelCenter(prism)
   ctx!.save()
   ctx!.textAlign = 'center'
   ctx!.font = '10px monospace'
-  if (maxed) {
-    ctx!.fillStyle = COLORS.textMid
-    ctx!.fillText(`Lv.${prism.level}`, x, y)
-  } else {
-    const cost = prismUpgradeCost(prism.prismKind, prism.level + 1)
-    ctx!.fillStyle = canAfford(inventory, 'lumen', cost) ? COLORS.textBright : COLORS.textMid
-    ctx!.fillText(`Lv.${prism.level} ▲${cost}`, x, y)
-  }
+  ctx!.fillStyle = COLORS.textMid
+  ctx!.fillText(`Strength ${status.strength}`, x, y)
   ctx!.restore()
 }
 
@@ -490,9 +470,10 @@ function demolishEconomyBuilding(hit: EconomyHit) {
 /** Levelt das Gebäude/den Turm hinter `target` um 1 hoch, sofern noch nicht maximal und die
  * Lumen-Kosten (siehe economy/buildings.ts generatorUpgradeCost()/containerUpgradeCost()/
  * towerdefense/towers.ts towerUpgradeCost()) bezahlt werden können — ausgelöst durch Klick auf
- * die "Level"-Zeile im Info-Panel (siehe pointerdown). Prismen haben kein Info-Panel (Klick dreht
- * sie stattdessen, siehe pendingPress-Logik) und werden daher separat geleveled, siehe
- * `attemptPrismLevelUp()`. */
+ * die "Level"-Zeile im Info-Panel (siehe pointerdown). Prismen haben kein Level (User-Vorgabe,
+ * entfernt) und daher auch kein Info-Panel — Klick dreht sie stattdessen (siehe pendingPress-
+ * Logik), ihre Ausgabe-Stärke ergibt sich live aus den ankommenden Strahlen (siehe
+ * lightSimulation.ts). */
 function attemptLevelUp(target: InfoTarget) {
   if (target.kind === 'source') {
     const source = lightSources.find((s) => s.id === target.id)
@@ -518,17 +499,6 @@ function attemptLevelUp(target: InfoTarget) {
   }
 }
 
-/** Prismen haben kein Info-Panel (Klick dreht sie, siehe pendingPress-Logik unten) — Level-Up
- * läuft daher über einen kleinen, separat hit-getesteten Badge neben dem Prisma (siehe
- * `hitTestPrismLevelBadge()`/`drawPrismLevelBadge()`), nicht über eine Panel-Zeile wie bei den
- * übrigen 3 levelbaren Bautypen. */
-function attemptPrismLevelUp(prism: Prism) {
-  if (prism.level >= PRISM_MAX_LEVEL) return
-  const cost = prismUpgradeCost(prism.prismKind, prism.level + 1)
-  if (!canAfford(inventory, 'lumen', cost)) return
-  spend(inventory, 'lumen', cost)
-  upgradePrism(prism)
-}
 
 /** Löscht einen Turm und erstattet seinen Lumen-Baukosten zurück (User-Wunsch). */
 function demolishTower(tower: PlacedTower) {
@@ -712,14 +682,6 @@ canvas.addEventListener('pointerdown', (e) => {
     // Kein Abriss für den Spawn — er ist Pflichtbestandteil des Defense-Rasters (immer genau 1).
     pendingPress = { kind: 'spawn', id: 'spawn', downPos: pos }
     return
-  }
-
-  if (!demolishMode) {
-    const badgePrism = hitTestPrismLevelBadge(pos.x, pos.y)
-    if (badgePrism) {
-      attemptPrismLevelUp(badgePrism)
-      return
-    }
   }
 
   const economyHit = hitTestEconomyBuilding(pos.x, pos.y)
@@ -1135,7 +1097,7 @@ function drawInfoPanel() {
       { label: 'Color', value: getResource(source.resourceId).name },
       { label: 'Level', value: maxed ? `${source.level}/${GENERATOR_MAX_LEVEL} (max)` : `${source.level}/${GENERATOR_MAX_LEVEL} (Lv.${source.level + 1}: ${generatorUpgradeCost(source.level + 1)} lumen)`, action: maxed ? undefined : 'level' },
       { label: 'Range', value: `${source.range} cells` },
-      { label: 'Rate', value: active ? `${source.baseRate.toFixed(1)}/s` : '0.0/s (no container)' },
+      { label: 'Status', value: active ? 'Delivering' : 'Idle (no container in range)' },
     ]
   } else if (infoTarget.kind === 'container') {
     const container = containers.find((c) => c.id === infoTarget!.id)
@@ -1422,9 +1384,6 @@ function drawBuildings() {
   for (const source of lightSources) {
     if (isSourceMaxed(source)) drawMaxLevelCellMarker(ctx!, placementGrid, { col: source.col, row: source.row })
   }
-  for (const prism of prisms) {
-    if (isPrismMaxed(prism)) drawMaxLevelCellMarker(ctx!, placementGrid, { col: prism.col, row: prism.row })
-  }
   for (const container of containers) {
     if (isContainerMaxed(container)) drawMaxLevelCellMarker(ctx!, placementGrid, { col: container.col, row: container.row })
   }
@@ -1433,8 +1392,10 @@ function drawBuildings() {
   for (const mirror of mirrors) drawMirrorEntity(ctx!, mirror, buildingCenter(mirror), placementGrid.cellSize)
   for (const prism of prisms) {
     const status = lightSimulation.prismStatus.get(prism.id)
-    if (status) drawPrismEntity(ctx!, prism, buildingCenter(prism), status, elapsedSeconds)
-    drawPrismLevelBadge(prism)
+    if (status) {
+      drawPrismEntity(ctx!, prism, buildingCenter(prism), status, elapsedSeconds)
+      drawPrismStrengthLabel(prism, status)
+    }
   }
   for (const container of containers) {
     const rates = lightSimulation.containerRates.get(container.id)

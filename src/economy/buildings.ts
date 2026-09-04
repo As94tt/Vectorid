@@ -31,19 +31,23 @@ export interface LightSource {
   resourceId: LightColor
   /** 1-5, siehe GENERATOR_RANGE_BY_LEVEL — steuert `range`. */
   level: number
-  /** Wie viele Zellen der Strahl maximal zurücklegt (inkl. Zellen mit Spiegeln), aus `level` abgeleitet. */
+  /** Wie viele Zellen der Strahl maximal zurücklegt (inkl. Zellen mit Spiegeln), aus `level`
+   * abgeleitet — bestimmt zugleich die "Stärke" (siehe lightSimulation.ts), mit der der Strahl an
+   * einem Container oder Prisma ankommt: Stärke = wie viele Zellen er von dort aus noch könnte. */
   range: number
-  /** Rate/Sekunde, die ein Container erhält, solange er von diesem Strahl (direkt oder über Spiegel) erreicht wird. */
-  baseRate: number
 }
 
-/** Ein Hexfeld hat 6 Richtungen (0-5, siehe `HexDirection` in grid/placementGrid.ts) statt der
- * früheren 4 — ein Spiegel liegt also auf einer von 3 möglichen Achsen (jede Achse liegt genau
- * zwischen zwei benachbarten Richtungen, z. B. Achse 0 zwischen Richtung 0 und 1), nicht mehr
- * nur 2 wie beim quadratischen Raster. Jede Achse spiegelt alle 6 Richtungen sauber in 3 Paare
- * (siehe `reflect()`) — Klick auf einen Spiegel dreht ihn 0 -> 1 -> 2 -> 0 (`rotateMirror()`).
- * Ändert nur die Richtung, nie Farbe oder Rate des Strahls. */
-export type MirrorOrientation = 0 | 1 | 2
+/** Ein Hexfeld hat 6 Richtungen (0-5, siehe `HexDirection` in grid/placementGrid.ts), und eine
+ * Spiegel-Achse kann in 6 um je 30° versetzten Lagen liegen (User-Vorgabe: alle Richtungen drehbar
+ * statt nur 3) — 3 davon liegen genau ZWISCHEN zwei benachbarten Richtungen (die bisherigen
+ * "sauberen" 0/1/2, z. B. Achse zwischen Richtung 0 und 1), die anderen 3 liegen genau AUF einer
+ * Richtung (die Richtung UND ihr Gegenüber liegen dann exakt auf der Achse). Ein Strahl, der exakt
+ * entlang einer solchen Achsen-Richtung ankommt, spiegelt sich auf SICH SELBST — läuft also
+ * unverändert weiter, statt umgelenkt zu werden (siehe `reflect()`), was physikalisch korrekt ist
+ * (ein Strahl exakt parallel zur Spiegellinie "streift" sie nur). Klick auf einen Spiegel dreht ihn
+ * zyklisch 0 -> 1 -> ... -> 5 -> 0 (`rotateMirror()`), abwechselnd zwischen beiden Achsen-Familien.
+ * Ändert nur die Richtung, nie Farbe oder Stärke des Strahls. */
+export type MirrorOrientation = 0 | 1 | 2 | 3 | 4 | 5
 
 export interface Mirror {
   id: string
@@ -64,11 +68,10 @@ export interface Mirror {
  * jeweilige Rezept definiert — die Form ist keine Tier-Obergrenze, sondern nur die Misch-METHODE. */
 export type PrismKind = 'triangle' | 'hexagon'
 
-/** 5 Level (User-Vorgabe): erhöht nur die Ausgabe-Rate (als Multiplikator auf die Basis-Rate),
- * nicht die Reichweite. Level 3 (Index 2, Faktor 1) entspricht der bisherigen Basis-Ausgabe. */
-export const PRISM_OUTPUT_MULTIPLIER_BY_LEVEL = [0.25, 0.5, 1, 1.5, 2] as const
-export const PRISM_MAX_LEVEL = PRISM_OUTPUT_MULTIPLIER_BY_LEVEL.length
-
+/** Prismen haben KEIN Level (User-Vorgabe, entfernt) — ihre Ausgabe-"Stärke" (= wie viele Zellen
+ * die Ausgabe noch weiterreicht) ergibt sich stattdessen live jeden Frame aus den ankommenden
+ * Strahlen (siehe lightSimulation.ts `registerHit()`/`prismAvgStrength`: Summe der Stärken aller
+ * ankommenden Strahlen geteilt durch ihre Anzahl, gerundet). */
 export interface Prism {
   id: string
   kind: 'prism'
@@ -77,12 +80,6 @@ export interface Prism {
   prismKind: PrismKind
   /** Max. gleichzeitig nötige Eingänge (Dreieck: 2, Hexagon: 3) — rein informativ/fürs Rendering. */
   maxParts: number
-  /** 1-5, siehe PRISM_OUTPUT_MULTIPLIER_BY_LEVEL — steuert `outputRate`. */
-  level: number
-  range: number
-  /** Rate/Sekunde der erzeugten Farbe, solange das Prisma aktiv (Rezept erfüllt) ist — Basis-Rate
-   * (siehe PRISM_SIMPLE_OUTPUT_RATE/PRISM_COMPLEX_OUTPUT_RATE) mal Level-Multiplikator. */
-  outputRate: number
   /** Hexagon: der dedizierte Output — strahlt seine Ausgabefarbe nur in DIESE eine der 6
    * Rasterrichtungen ab, die anderen 5 Seiten bleiben Eingänge, per Klick drehbar wie ein Spiegel
    * (`rotatePrism()`), zyklisch 0->1->2->3->4->5->0.
@@ -125,17 +122,9 @@ export const BUILDING_COSTS = {
 export function generatorUpgradeCost(targetLevel: number): number {
   return BUILDING_COSTS.source * targetLevel
 }
-export function prismUpgradeCost(prismKind: PrismKind, targetLevel: number): number {
-  return (prismKind === 'triangle' ? BUILDING_COSTS.prismSimple : BUILDING_COSTS.prismComplex) * targetLevel * 0.5
-}
 export function containerUpgradeCost(targetLevel: number): number {
   return BUILDING_COSTS.container * targetLevel
 }
-
-const SOURCE_BASE_RATE = 4
-const PRISM_RANGE = 6
-const PRISM_SIMPLE_OUTPUT_RATE = 2
-const PRISM_COMPLEX_OUTPUT_RATE = 3
 
 let idCounter = 0
 function nextId(prefix: string): string {
@@ -144,20 +133,14 @@ function nextId(prefix: string): string {
 }
 
 export function createLightSource(col: number, row: number, resourceId: LightColor): LightSource {
-  return { id: nextId('source'), kind: 'source', col, row, resourceId, level: 1, range: GENERATOR_RANGE_BY_LEVEL[0], baseRate: SOURCE_BASE_RATE }
+  return { id: nextId('source'), kind: 'source', col, row, resourceId, level: 1, range: GENERATOR_RANGE_BY_LEVEL[0] }
 }
 
 export function createMirror(col: number, row: number, orientation: MirrorOrientation = 0): Mirror {
   return { id: nextId('mirror'), kind: 'mirror', col, row, orientation }
 }
 
-function prismOutputRate(prismKind: PrismKind, level: number): number {
-  const base = prismKind === 'triangle' ? PRISM_SIMPLE_OUTPUT_RATE : PRISM_COMPLEX_OUTPUT_RATE
-  return base * PRISM_OUTPUT_MULTIPLIER_BY_LEVEL[level - 1]
-}
-
 export function createPrism(col: number, row: number, prismKind: PrismKind): Prism {
-  const level = 1
   return {
     id: nextId('prism'),
     kind: 'prism',
@@ -165,9 +148,6 @@ export function createPrism(col: number, row: number, prismKind: PrismKind): Pri
     row,
     prismKind,
     maxParts: prismKind === 'triangle' ? 2 : 3,
-    level,
-    range: PRISM_RANGE,
-    outputRate: prismOutputRate(prismKind, level),
     outputDirection: 0,
   }
 }
@@ -177,17 +157,11 @@ export function createContainer(col: number, row: number): Container {
 }
 
 /** Erhöht das Level um 1 (bis zum jeweiligen Maximum) und rechnet die abgeleiteten Felder neu —
- * siehe GENERATOR_RANGE_BY_LEVEL / PRISM_OUTPUT_MULTIPLIER_BY_LEVEL / CONTAINER_CAPACITY_BY_LEVEL. */
+ * siehe GENERATOR_RANGE_BY_LEVEL / CONTAINER_CAPACITY_BY_LEVEL. */
 export function upgradeLightSource(source: LightSource) {
   if (source.level >= GENERATOR_MAX_LEVEL) return
   source.level += 1
   source.range = GENERATOR_RANGE_BY_LEVEL[source.level - 1]
-}
-
-export function upgradePrism(prism: Prism) {
-  if (prism.level >= PRISM_MAX_LEVEL) return
-  prism.level += 1
-  prism.outputRate = prismOutputRate(prism.prismKind, prism.level)
 }
 
 export function upgradeContainer(container: Container) {
@@ -196,20 +170,24 @@ export function upgradeContainer(container: Container) {
 }
 
 /**
- * Spiegelt eine der 6 Richtungen an der Achse eines Spiegels. Achse `orientation` (0/1/2) liegt
- * genau zwischen Richtung `orientation` und `orientation+1` — daraus folgt die Formel
- * `(2*orientation + 1 - direction) mod 6`, die alle 6 Richtungen sauber in 3 Paare spiegelt
- * (keine Richtung bildet sich auf sich selbst ab, anders als bei den 3 "unsauberen" Zwischen-
- * werten 30°/90°/150° zwischen den Achsen — deshalb genau diese 3 Orientierungen gewählt).
+ * Spiegelt eine der 6 Richtungen an der Achse eines Spiegels. Eine Achse liegt (in Vielfachen von
+ * 30°) bei `orientation/2` — für gerade `orientation` (0/2/4) exakt AUF einer Richtung, für
+ * ungerade (1/3/5) genau ZWISCHEN zwei Richtungen (das sind die bisherigen 3 Orientierungen, siehe
+ * MirrorOrientation-Kommentar). Allgemeine Formel für Reflexion an einer Achse bei Winkel `t`
+ * (in 60°-Schritten): `(2t - direction) mod 6`; mit `t = orientation/2` wird daraus exakt
+ * `(orientation - direction) mod 6` — für gerade `orientation` bildet eine zur Achse parallele
+ * Richtung (`direction === orientation` oder `direction === orientation+3`) sich dabei auf SICH
+ * SELBST ab (Strahl läuft unverändert weiter, siehe Datei-Kommentar oben), für ungerade
+ * `orientation` bildet sich (wie bisher) nie eine Richtung auf sich selbst ab.
  */
 export function reflect(direction: HexDirection, orientation: MirrorOrientation): HexDirection {
-  return (((2 * orientation + 1 - direction) % 6) + 6) % 6 as HexDirection
+  return (((orientation - direction) % 6) + 6) % 6 as HexDirection
 }
 
-/** Klick auf einen Spiegel dreht ihn (User-Vorgabe: "in jede Richtung drehen lassen") statt ein
- * Info-Panel zu öffnen — zyklisch durch alle 3 Achsen-Orientierungen. */
+/** Klick auf einen Spiegel dreht ihn (User-Vorgabe: "in alle Richtungen drehen lassen, nicht nur
+ * 3") statt ein Info-Panel zu öffnen — zyklisch durch alle 6 Achsen-Orientierungen. */
 export function rotateMirror(mirror: Mirror) {
-  mirror.orientation = ((mirror.orientation + 1) % 3) as MirrorOrientation
+  mirror.orientation = ((mirror.orientation + 1) % 6) as MirrorOrientation
 }
 
 /** Klick auf ein Prisma dreht seinen einzigen Output-Port (User-Vorgabe: "Prismen müssen auch

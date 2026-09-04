@@ -53,6 +53,17 @@
 // durchgerechnet zu werden) — siehe `traceAllFronts()`. Gilt weiterhin nur für leere Zellen:
 // Spiegel/Prismen/Container dürfen von beliebig vielen Strahlen gleichzeitig besucht werden (das
 // ist ja der Sinn eines Sammelpunkts).
+//
+// Strahl-"Stärke" (User-Vorgabe, ersetzt die frühere feste Rate/Sekunde je Lichtquelle bzw.
+// Ausgabe-Rate je Prisma): ein Strahl hat an jeder Zelle die Stärke = wie viele Zellen er von DORT
+// aus noch zurücklegen könnte (`Front.stepsLeft`, siehe unten) — ein Level-1-Generator (Reichweite
+// 3) liefert an einen 1 Zelle entfernten Container also Stärke 2. Erreicht ein Strahl stattdessen
+// ein Prisma, zählt NUR diese Stärke (nicht Farbe/Rezept) mit in dessen Durchschnitt ein (siehe
+// `registerHit()`): kommen mehrere Strahlen an, wird ihre Stärke addiert und durch ihre Anzahl
+// geteilt (Standard-Rundung), und GENAU dieser Wert ist dann sowohl die Stärke, mit der das
+// Prisma (sobald sein Rezept erfüllt ist) selbst weiterstrahlt, als auch entsprechend viele Zellen
+// weit reicht (siehe `prismAvgStrength`/`simulateLight()`) — Prismen haben dafür kein eigenes
+// Level mehr (User-Vorgabe, entfernt).
 
 import { RESOURCES, getResource, type ResourceDefinition } from '../data/resources'
 import { cellKey, hexNeighbor, inBounds, type GridCoord, type HexDirection, type PlacementGrid } from '../grid/placementGrid'
@@ -87,6 +98,9 @@ export interface PrismStatus {
    * automatisch abgeleitete freie Ecke (siehe `deriveTriangleOutputDirection()`), bei Hexagonen
    * unverändert `prism.outputDirection`. */
   outputDirection: HexDirection
+  /** Gerundeter Durchschnitt der Stärke aller ankommenden Strahlen (siehe `tracePass()`) — so viele
+   * Zellen reicht die eigene Ausgabe noch weiter, 0 wenn (noch) kein Strahl ankommt. */
+  strength: number
 }
 
 export interface SimulationResult {
@@ -151,9 +165,12 @@ interface Front {
   direction: HexDirection
   resourceId: string
   color: string
-  rate: number
   isRawSource: boolean
   sourceId?: string
+  /** Wie viele weitere Zellen dieser Strahl noch zurücklegen kann — sinkt mit jedem Schritt um 1.
+   * Das ist zugleich seine "Stärke" (User-Vorgabe): kommt er bei einem Container oder Prisma an,
+   * ist der dort gerade noch übrige Wert (NACH dem letzten Schritt) genau die Menge, die
+   * ankommt/weitergegeben wird — siehe `addContainerRate()`/`registerHit()`. */
   stepsLeft: number
   alive: boolean
   reachedEndpoint: boolean
@@ -273,12 +290,23 @@ interface TracePass {
   prismCounts: Map<string, { c: number; m: number; y: number }>
   prismColors: Map<string, Set<string>>
   prismSides: Map<string, Set<HexDirection>>
+  /** Gerundeter Durchschnitt der Stärke aller Strahlen, die dieses Prisma in diesem Durchlauf
+   * erreicht haben (siehe `registerHit()`) — das ist die Stärke, mit der es selbst (sobald sein
+   * Rezept erfüllt ist) im NÄCHSTEN Durchlauf weiterstrahlt (siehe `simulateLight()`). */
+  prismAvgStrength: Map<string, number>
   containerRates: Map<string, Map<string, number>>
   activeSourceIds: Set<string>
 }
 
+/** Rundet wie vom User vorgegeben: <.5 ab, >.5 auf (= Standard-Rundung). */
+function roundStrength(value: number): number {
+  return Math.round(value)
+}
+
 /** Ein kompletter Strahlverfolgungs-Durchlauf: Lichtquellen strahlen immer, bereits aufgelöste
- * Prismen (laut `prismOutputs` aus dem VORIGEN Durchlauf) strahlen zusätzlich ihre Ausgabefarbe. */
+ * Prismen (laut `prismOutputs` aus dem VORIGEN Durchlauf) strahlen zusätzlich ihre Ausgabefarbe,
+ * mit der Stärke, die sie im VORIGEN Durchlauf selbst von ihren Eingangs-Strahlen ermittelt haben
+ * (siehe `prismStrengths`/`prismAvgStrength`). */
 function tracePass(
   grid: PlacementGrid,
   lookup: Map<string, EconomyBuilding>,
@@ -286,6 +314,7 @@ function tracePass(
   prisms: Prism[],
   prismOutputs: Map<string, ResourceDefinition | null>,
   emitDirections: Map<string, HexDirection>,
+  prismStrengths: Map<string, number>,
 ): TracePass {
   const fronts: Front[] = []
 
@@ -296,7 +325,6 @@ function tracePass(
         direction: dir,
         resourceId: source.resourceId,
         color: getResource(source.resourceId).color,
-        rate: source.baseRate,
         isRawSource: true,
         sourceId: source.id,
         stepsLeft: source.range,
@@ -317,9 +345,8 @@ function tracePass(
       direction: emitDirections.get(prism.id) ?? prism.outputDirection,
       resourceId: output.id,
       color: output.color,
-      rate: prism.outputRate,
       isRawSource: false,
-      stepsLeft: prism.range,
+      stepsLeft: prismStrengths.get(prism.id) ?? 0,
       alive: true,
       reachedEndpoint: false,
     })
@@ -331,6 +358,7 @@ function tracePass(
   const prismCounts = new Map<string, { c: number; m: number; y: number }>()
   const prismColors = new Map<string, Set<string>>()
   const prismSides = new Map<string, Set<HexDirection>>()
+  const prismStrengthSums = new Map<string, { sum: number; count: number }>()
   const containerRates = new Map<string, Map<string, number>>()
   const activeSourceIds = new Set<string>()
 
@@ -345,7 +373,7 @@ function tracePass(
     containerRates.set(container.id, perResource)
   }
 
-  function registerHit(prism: Prism, travelDirection: HexDirection, resourceId: string, isRawSource: boolean) {
+  function registerHit(prism: Prism, travelDirection: HexDirection, resourceId: string, isRawSource: boolean, strength: number) {
     // `travelDirection` ist die Richtung, in die der Strahl unterwegs war, als er die Zelle
     // erreichte — die tatsächlich berührte Seite des Prismas ist die ENTGEGENGESETZTE Richtung
     // (der Strahl kommt aus dem Nachbarn, der von hier aus in `travelDirection` liegt, also liegt
@@ -370,20 +398,29 @@ function tracePass(
     const sides = prismSides.get(prism.id) ?? new Set<HexDirection>()
     sides.add(side)
     prismSides.set(prism.id, sides)
+    const strengthAcc = prismStrengthSums.get(prism.id) ?? { sum: 0, count: 0 }
+    strengthAcc.sum += strength
+    strengthAcc.count += 1
+    prismStrengthSums.set(prism.id, strengthAcc)
   }
 
   for (const front of fronts) {
     if (front.cells.length > 1) {
       segments.push({ cells: front.cells, color: front.color, resourceId: front.resourceId, reachedEndpoint: front.reachedEndpoint })
     }
-    if (front.hitPrism) registerHit(front.hitPrism.prism, front.hitPrism.fromDirection, front.resourceId, front.isRawSource)
+    if (front.hitPrism) registerHit(front.hitPrism.prism, front.hitPrism.fromDirection, front.resourceId, front.isRawSource, front.stepsLeft)
     if (front.hitContainer) {
-      addContainerRate(front.hitContainer, front.resourceId, front.rate)
+      addContainerRate(front.hitContainer, front.resourceId, front.stepsLeft)
       if (front.isRawSource && front.sourceId) activeSourceIds.add(front.sourceId)
     }
   }
 
-  return { segments, prismCounts, prismColors, prismSides, containerRates, activeSourceIds }
+  const prismAvgStrength = new Map<string, number>()
+  for (const [prismId, { sum, count }] of prismStrengthSums) {
+    if (count > 0) prismAvgStrength.set(prismId, roundStrength(sum / count))
+  }
+
+  return { segments, prismCounts, prismColors, prismSides, prismAvgStrength, containerRates, activeSourceIds }
 }
 
 function resolveTriangleOutput(presentColors: Set<string>): ResourceDefinition | null {
@@ -425,7 +462,13 @@ export function simulateLight(grid: PlacementGrid, sources: LightSource[], mirro
   // abgeleitete freie Ecke überschrieben (siehe deriveTriangleOutputDirection()) und dann NIE
   // wieder geändert (dieselbe monotone Sperre wie bei `prismOutputs`, siehe Datei-Kommentar).
   let emitDirections = new Map<string, HexDirection>(prisms.map((p) => [p.id, p.outputDirection]))
-  let pass = tracePass(grid, lookup, sources, prisms, prismOutputs, emitDirections)
+  // Stärke, mit der ein aufgelöstes Prisma gerade weiterstrahlt (siehe `tracePass()`/
+  // `prismAvgStrength`) — anders als `prismOutputs`/`emitDirections` NICHT gesperrt: wird nach
+  // JEDEM Durchlauf frisch aus dessen Treffern übernommen, damit spätere Änderungen an
+  // vorgeschalteten Strahlen (z. B. ein geleveltes Generator davor) sich weiter durchreichen.
+  let prismStrengths = new Map<string, number>()
+  let pass = tracePass(grid, lookup, sources, prisms, prismOutputs, emitDirections, prismStrengths)
+  prismStrengths = pass.prismAvgStrength
 
   // Obergrenze rein aus der Anzahl der Prismen abgeleitet: dank der monotonen Sperre (siehe
   // Datei-Kommentar) muss JEDER Durchlauf, der überhaupt noch etwas ändert, mindestens ein
@@ -453,7 +496,8 @@ export function simulateLight(grid: PlacementGrid, sources: LightSource[], mirro
     prismOutputs = nextOutputs
     emitDirections = nextEmitDirections
     if (!changed) break
-    pass = tracePass(grid, lookup, sources, prisms, prismOutputs, emitDirections)
+    pass = tracePass(grid, lookup, sources, prisms, prismOutputs, emitDirections, prismStrengths)
+    prismStrengths = pass.prismAvgStrength
   }
 
   const prismStatus = new Map<string, PrismStatus>()
@@ -464,6 +508,7 @@ export function simulateLight(grid: PlacementGrid, sources: LightSource[], mirro
       sides: pass.prismSides.get(prism.id) ?? new Set(),
       output: prismOutputs.get(prism.id) ?? null,
       outputDirection: emitDirections.get(prism.id) ?? prism.outputDirection,
+      strength: pass.prismAvgStrength.get(prism.id) ?? 0,
     })
   }
 

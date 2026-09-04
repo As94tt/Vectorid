@@ -4,7 +4,7 @@
 
 import { COLORS, isColorDark } from '../constants/colors'
 import { getResource } from '../data/resources'
-import { GENERATOR_MAX_LEVEL, PRISM_MAX_LEVEL, CONTAINER_MAX_LEVEL, type Container, type LightSource, type Mirror, type Prism } from '../economy/buildings'
+import { GENERATOR_MAX_LEVEL, CONTAINER_MAX_LEVEL, type Container, type LightSource, type Mirror, type MirrorOrientation, type Prism } from '../economy/buildings'
 import type { BeamSegment, PrismStatus } from '../economy/lightSimulation'
 import { cellCenter, GRID_EXPAND_COST, type GridCoord, type HexDirection, type PlacementGrid } from '../grid/placementGrid'
 import { drawCircle, drawCircleOutline, drawHexagon, drawHexagonOutline, drawTriangle, drawTriangleOutline, strokeRoundedPolyline } from './shapes'
@@ -95,9 +95,9 @@ function levelSizeScale(level: number, maxLevel: number): number {
 export function sourceOuterRadius(source: LightSource): number {
   return SOURCE_OUTER_SIZE * levelSizeScale(source.level, GENERATOR_MAX_LEVEL)
 }
+/** Prismen haben kein Level mehr (User-Vorgabe, entfernt) — immer die volle Basisgröße. */
 export function prismSize(prism: Prism): number {
-  const base = prism.prismKind === 'triangle' ? PRISM_SIMPLE_SIZE : PRISM_COMPLEX_SIZE
-  return base * levelSizeScale(prism.level, PRISM_MAX_LEVEL)
+  return prism.prismKind === 'triangle' ? PRISM_SIMPLE_SIZE : PRISM_COMPLEX_SIZE
 }
 export function containerRadius(container: Container): number {
   return CONTAINER_SIZE * levelSizeScale(container.level, CONTAINER_MAX_LEVEL)
@@ -105,9 +105,6 @@ export function containerRadius(container: Container): number {
 
 export function isSourceMaxed(source: LightSource): boolean {
   return source.level >= GENERATOR_MAX_LEVEL
-}
-export function isPrismMaxed(prism: Prism): boolean {
-  return prism.level >= PRISM_MAX_LEVEL
 }
 export function isContainerMaxed(container: Container): boolean {
   return container.level >= CONTAINER_MAX_LEVEL
@@ -126,11 +123,12 @@ export function drawLightSourceEntity(ctx: CanvasRenderingContext2D, source: Lig
   drawCircle(ctx, center.x, center.y, inner * pulse, color, 14)
 }
 
-/** Eine von 3 möglichen Spiegel-Achsen (0/1/2, siehe MirrorOrientation-Kommentar in
- * economy/buildings.ts) — je 60° zueinander versetzt, liegt genau zwischen zwei Rasterrichtungen. */
-const MIRROR_AXIS_ANGLE_DEG: Record<0 | 1 | 2, number> = { 0: -30, 1: -90, 2: -150 }
+/** Eine von 6 möglichen Spiegel-Achsen (siehe MirrorOrientation-Kommentar in economy/buildings.ts)
+ * — je 30° zueinander versetzt, abwechselnd genau AUF einer Rasterrichtung (gerade Werte) und
+ * genau ZWISCHEN zwei Rasterrichtungen (ungerade Werte, die bisherigen 3 einzig möglichen Achsen). */
+const MIRROR_AXIS_ANGLE_DEG: Record<MirrorOrientation, number> = { 0: 0, 1: -30, 2: -60, 3: -90, 4: -120, 5: -150 }
 
-/** Kleine, glühende Linie durch die Zellmitte, Winkel je nach Achsen-Orientierung (0/1/2) —
+/** Kleine, glühende Linie durch die Zellmitte, Winkel je nach Achsen-Orientierung (0-5) —
  * farblos (Spiegel ändern nie die Farbe). */
 export function drawMirrorEntity(ctx: CanvasRenderingContext2D, mirror: Mirror, center: { x: number; y: number }, cellSize: number) {
   const half = cellSize * 0.55
