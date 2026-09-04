@@ -1,9 +1,9 @@
 // Farb-Effekte — jede der 14 Kampf-Farben (Tier 1-5, siehe data/resources.ts) hat ihren EIGENEN,
 // festen Effekt, der bei einem Treffer direkt angewendet wird — siehe applyAmmoEffect() als
 // zentraler Dispatch, aufgerufen aus towerdefense/combat.ts' treatHit(). Exakt nach der
-// Referenztabelle Assets/ColorEffects.png ("What Each Color Does") — siehe auch die
-// COLOR_EFFECT_INFO-Texte unten, die direkt daraus übernommen sind. Alle Stack-Felder/Konstanten
-// leben in enemies.ts (Datenmodell), diese Datei enthält nur die Anwendungs-LOGIK je Farbe.
+// Referenztabelle Assets/ColorEffects.png ("What Each Color Does", wird 1:1 als Bild angezeigt,
+// siehe render/infoImagePanel.ts). Alle Stack-Felder/Konstanten leben in enemies.ts
+// (Datenmodell), diese Datei enthält nur die Anwendungs-LOGIK je Farbe.
 //
 //   Turmform -> bestimmt, wie Treffer verteilt werden (siehe combat.ts)
 //   Munition -> bestimmt hier, WELCHER Farb-Effekt beim Treffer ausgelöst wird
@@ -233,23 +233,4 @@ export function applyAmmoEffect(resourceId: string | null, damage: number, targe
       applyWhite(target)
       return
   }
-}
-
-/** Kurzbeschreibungen für die "Ammo"-Infoseite (siehe render/referencePanels.ts) — 1:1 aus
- * Assets/ColorEffects.png übernommen. */
-export const COLOR_EFFECT_INFO: Record<string, { name: string; description: string }> = {
-  cyan: { name: 'Minor Slow', description: 'Each hit slightly slows the target.' },
-  magenta: { name: 'Bonus Damage', description: 'Each hit deals extra direct damage.' },
-  yellow: { name: 'Chain Lightning', description: 'Each hit jumps to up to 3 enemies.' },
-  blue: { name: 'Slow', description: '+1 stack per hit, up to 10. Each stack increases slow. Lose 1 stack/sec.' },
-  red: { name: 'Burn', description: '+1 stack per hit, up to 10. Burn damage scales with stacks. Lose 1 stack/sec.' },
-  green: { name: 'Poison', description: 'Each hit resets poison to 10 stacks. Decays by 1 stack/sec.' },
-  cerulean: { name: 'Freeze', description: 'Builds 0-30 stacks. At threshold: freeze for 1 sec.' },
-  violet: { name: 'Vulnerability', description: 'Builds 0-100 stacks. Increases damage taken up to +10%.' },
-  chartreuse: { name: 'Stack Spread', description: 'Spreads up to 50% of current Tier 3 stacks to nearby enemies. Spread copies cannot spread again.' },
-  aquamarine: { name: 'Pull', description: 'Pulls nearby enemies together within range.' },
-  fuchsia: { name: 'Scaling Chain Lightning', description: 'Builds 0-100 stacks. More stacks = more chained targets.' },
-  amber: { name: 'Explosion', description: 'Builds 0-30 stacks. At threshold: explodes for 3% max HP as AoE damage.' },
-  black: { name: 'Execute', description: 'Each hit raises execute threshold by 0.1%. Stacks last 5 sec. Only Black hits can execute.' },
-  white: { name: 'Purge Burst', description: 'Consumes all color stacks on the target to deal high burst damage.' },
 }

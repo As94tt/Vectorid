@@ -63,6 +63,7 @@ import {
 } from './render/buildingRender'
 import { buildHudButtons, drawHud, hitTestButton, HUD_HEIGHT, type HudButton } from './render/hud'
 import { buildWheelLayout, drawColorWheelPanel, hitTestWheelClose, hitTestWheelSwatch, type WheelSwatch } from './render/colorWheelPanel'
+import { drawInfoImagePanel, hitTestInfoImageClose } from './render/infoImagePanel'
 import {
   buildTowerPalette,
   drawTowerEntity,
@@ -80,7 +81,7 @@ import { drawPath, type Point } from './towerdefense/path'
 import { updateProjectiles, updateTowers, pruneVisualEffects, type Projectile, type VisualEffect } from './towerdefense/combat'
 import { createEnemy, pruneEnemies, tickEnemy, type Enemy } from './towerdefense/enemies'
 import { drawEnemies, drawProjectiles, drawTowerCombatEffects, drawVisualEffects } from './render/combatRender'
-import { drawAmmoReferencePanel, drawTowerReferencePanel, hitTestReferencePanelClose } from './render/referencePanels'
+import { drawTowerReferencePanel, hitTestReferencePanelClose } from './render/referencePanels'
 
 const canvas = document.getElementById('scene') as HTMLCanvasElement
 const ctx = canvas.getContext('2d')
@@ -553,14 +554,20 @@ function expandGrid() {
 canvas.addEventListener('pointerdown', (e) => {
   const pos = pointerPos(e)
 
-  // Farbwheel-Panel blockiert alle anderen Interaktionen, solange es offen ist.
+  // Farbwheel-Panel blockiert alle anderen Interaktionen, solange es offen ist. 'info' zeigt nur
+  // Assets/InfoColors.png als Bild (siehe render/infoImagePanel.ts, eigener Close-Hit-Test),
+  // 'ammo' ist die eigentliche, klickbare Munitions-Auswahl (render/colorWheelPanel.ts).
   if (wheelMode !== 'closed') {
+    if (wheelMode === 'info') {
+      if (hitTestInfoImageClose('colors', width, height, pos.x, pos.y)) wheelMode = 'closed'
+      return
+    }
     if (hitTestWheelClose(width, height, pos.x, pos.y)) {
       wheelMode = 'closed'
       ammoTargetTowerId = null
       return
     }
-    if (wheelMode === 'ammo' && ammoTargetTowerId) {
+    if (ammoTargetTowerId) {
       const swatch = hitTestWheelSwatch(wheelSwatches, pos.x, pos.y)
       const tower = towers.find((t) => t.id === ammoTargetTowerId)
       if (swatch && tower && !unavailableAmmoIds(ammoTargetTowerId).has(swatch.resource.id)) {
@@ -602,9 +609,14 @@ canvas.addEventListener('pointerdown', (e) => {
   }
 
   // Türme-/Munitions-Infoseite blockiert ebenso alle anderen Interaktionen, solange offen —
-  // reine Anzeige, einziger Klick-Handler ist das Schließen.
+  // reine Anzeige, einziger Klick-Handler ist das Schließen. "Ammo" zeigt nur Assets/
+  // ColorEffects.png als Bild (eigener Close-Hit-Test, siehe render/infoImagePanel.ts).
   if (defenseInfoMode !== 'closed') {
-    if (hitTestReferencePanelClose(width, height, pos.x, pos.y)) defenseInfoMode = 'closed'
+    if (defenseInfoMode === 'ammo') {
+      if (hitTestInfoImageClose('effects', width, height, pos.x, pos.y)) defenseInfoMode = 'closed'
+    } else if (hitTestReferencePanelClose(width, height, pos.x, pos.y)) {
+      defenseInfoMode = 'closed'
+    }
     return
   }
 
@@ -1401,21 +1413,13 @@ function render(_dt: number) {
   drawHud(ctx!, width, inventory, computeResourceRates(), playerName, playerLevel, hudButtons, demolishMode)
 
   if (wheelMode === 'info') {
-    drawColorWheelPanel(ctx!, width, height, wheelSwatches, hoveredWheelResourceId)
+    drawInfoImagePanel(ctx!, width, height, 'colors')
   } else if (wheelMode === 'ammo' && ammoTargetTowerId) {
-    drawColorWheelPanel(
-      ctx!,
-      width,
-      height,
-      wheelSwatches,
-      hoveredWheelResourceId,
-      'Click a color to assign it to this tower as ammo',
-      unavailableAmmoIds(ammoTargetTowerId),
-    )
+    drawColorWheelPanel(ctx!, width, height, wheelSwatches, hoveredWheelResourceId, computeResourceRates(ammoTargetTowerId), unavailableAmmoIds(ammoTargetTowerId))
   }
 
   if (defenseInfoMode === 'towers') drawTowerReferencePanel(ctx!, width, height)
-  else if (defenseInfoMode === 'ammo') drawAmmoReferencePanel(ctx!, width, height)
+  else if (defenseInfoMode === 'ammo') drawInfoImagePanel(ctx!, width, height, 'effects')
 
   drawInfoPanel()
 }
