@@ -27,11 +27,15 @@
 // Zwei grundverschiedene Prisma-Typen (Form = Misch-METHODE):
 //   - Dreieck (triangle): exaktes Set von 2 fest benannten Eingangsfarben. GEOMETRISCH
 //     eingeschränkt (User-Vorgabe): das Dreieck ist so gedreht, dass seine 3 Ecken auf 3 der 6
-//     Hex-Nachbarn zeigen (die dazwischenliegenden 3 Seiten treffen keine Ecke) — von den 3
-//     eckengenauen Richtungen ist genau eine der Output, die anderen 2 (jeweils outputDirection
-//     ±2, siehe `TRIANGLE_INPUT_OFFSET`) sind die einzigen gültigen Eingänge. Ein Strahl, der die
-//     Zelle aus einer der 3 "Seiten"-Richtungen erreicht, wird NICHT registriert (siehe
-//     `registerHit()`).
+//     Hex-Nachbarn zeigen (die dazwischenliegenden 3 Seiten treffen keine Ecke) — ein Strahl, der
+//     die Zelle aus einer der 3 "Seiten"-Richtungen erreicht, wird NICHT registriert (siehe
+//     `registerHit()`/`isTriangleCorner()`). Die OUTPUT-Richtung ist NICHT mehr fest per Klick
+//     gewählt (User-Vorgabe V2): sobald genau 2 der 3 Ecken gerade einen Strahl tragen, wird die
+//     3. (freie) Ecke automatisch zum Output (siehe `deriveTriangleOutputDirection()`). `rotate-
+//     Prism()` dreht weiterhin `outputDirection` — das legt jetzt nur noch fest, WELCHE 3 der 6
+//     Richtungen überhaupt Ecken sind (Anker fürs Dreieck), und dient als Fallback, solange nicht
+//     exakt 2 Ecken belegt sind (z. B. direkt nach dem Platzieren, oder falls zufällig alle 3
+//     oder nur 1 Ecke anliegt).
 //   - Hexagon (hexagon, ersetzt das frühere Fünfeck): exakte rohe Cyan/Magenta/Yellow-Teile-Summe
 //     (ignoriert gemischte Farben komplett, siehe hexagonRecipe) ODER ein exaktes Set fest
 //     benannter Farben (siehe hexagonNamedRecipe, Sonderfall Black/White) — unverändert alle 5
@@ -79,6 +83,10 @@ export interface PrismStatus {
    * "fehlt noch"/"liegt an"-Anschlussstellen). */
   sides: Set<HexDirection>
   output: ResourceDefinition | null
+  /** Effektive Output-Richtung fürs Rendering (siehe `drawPrismPorts()`) — bei Dreiecken die
+   * automatisch abgeleitete freie Ecke (siehe `deriveTriangleOutputDirection()`), bei Hexagonen
+   * unverändert `prism.outputDirection`. */
+  outputDirection: HexDirection
 }
 
 export interface SimulationResult {
@@ -113,11 +121,26 @@ function oppositeDirection(dir: HexDirection): HexDirection {
   return ((dir + 3) % 6) as HexDirection
 }
 
+/** Die 3 Richtungen, an denen ein um `anchor` ausgerichtetes Dreieck-Prisma überhaupt eine Ecke
+ * hat (anchor selbst + ±2, siehe render/buildingRender.ts für die passende Rotation). */
+function triangleCornerDirections(anchor: HexDirection): [HexDirection, HexDirection, HexDirection] {
+  return [anchor, ((anchor + 2) % 6) as HexDirection, ((anchor + 4) % 6) as HexDirection]
+}
+
 /** Ein gedrehtes Dreieck-Prisma hat nur an 3 der 6 Hex-Richtungen überhaupt eine Ecke (die
- * anderen 3 treffen eine flache Seite) — outputDirection ist eine davon, die 2 anderen (je ±2,
- * siehe render/buildingRender.ts für die passende Rotation) sind die einzigen gültigen Eingänge. */
-function isTriangleInputSide(outputDirection: HexDirection, side: HexDirection): boolean {
-  return side === (((outputDirection + 2) % 6) as HexDirection) || side === (((outputDirection + 4) % 6) as HexDirection)
+ * anderen 3 treffen eine flache Seite, zählen nie als Eingang). */
+function isTriangleCorner(anchor: HexDirection, side: HexDirection): boolean {
+  return triangleCornerDirections(anchor).includes(side)
+}
+
+/** Automatische Output-Wahl (User-Vorgabe): sobald genau 2 der 3 Ecken gerade einen Strahl
+ * tragen, wird die 3. (freie) Ecke die Output-Richtung. Sonst (0, 1 oder alle 3 Ecken belegt)
+ * bleibt `anchor` (die per Klick gewählte Rotation) als Fallback stehen. */
+function deriveTriangleOutputDirection(anchor: HexDirection, hitSides: Set<HexDirection>): HexDirection {
+  const corners = triangleCornerDirections(anchor)
+  const fed = corners.filter((c) => hitSides.has(c))
+  if (fed.length === 2) return corners.find((c) => !fed.includes(c))!
+  return anchor
 }
 
 /** Ein einzelner, noch laufender Strahl (Lichtquelle oder aufgelöstes Prisma). `cells[0]` ist die
@@ -262,6 +285,7 @@ function tracePass(
   sources: LightSource[],
   prisms: Prism[],
   prismOutputs: Map<string, ResourceDefinition | null>,
+  emitDirections: Map<string, HexDirection>,
 ): TracePass {
   const fronts: Front[] = []
 
@@ -282,14 +306,15 @@ function tracePass(
     }
   }
 
-  // Ein aufgelöstes Prisma strahlt nur noch in seine EINE dedizierte outputDirection (User-
-  // Vorgabe, per Klick drehbar wie ein Spiegel) — nicht mehr in alle 6 Richtungen gleichzeitig.
+  // Ein aufgelöstes Prisma strahlt nur noch in seine EINE Output-Richtung ab — beim Dreieck die
+  // automatisch abgeleitete freie Ecke (siehe `emitDirections`/`deriveTriangleOutputDirection()`),
+  // beim Hexagon unverändert `prism.outputDirection` — nicht mehr in alle 6 Richtungen gleichzeitig.
   for (const prism of prisms) {
     const output = prismOutputs.get(prism.id)
     if (!output) continue
     fronts.push({
       cells: [{ col: prism.col, row: prism.row }],
-      direction: prism.outputDirection,
+      direction: emitDirections.get(prism.id) ?? prism.outputDirection,
       resourceId: output.id,
       color: output.color,
       rate: prism.outputRate,
@@ -328,7 +353,11 @@ function tracePass(
     // unten: die muss an der ECHTEN, sichtbaren Seite prüfen, nicht an der Lauf-Richtung.
     const side = oppositeDirection(travelDirection)
 
-    if (prism.prismKind === 'triangle' && !isTriangleInputSide(prism.outputDirection, side)) return
+    // Beim Dreieck zählt JEDE der 3 Ecken als potenzieller Eingang (welche davon am Ende
+    // tatsächlich Output wird, entscheidet sich erst NACH dem Durchlauf, siehe
+    // `deriveTriangleOutputDirection()` in simulateLight()) — nur die 3 "Seiten"-Richtungen
+    // werden hier schon ausgeschlossen.
+    if (prism.prismKind === 'triangle' && !isTriangleCorner(prism.outputDirection, side)) return
 
     if (isRawSource) {
       const counts = prismCounts.get(prism.id) ?? { c: 0, m: 0, y: 0 }
@@ -387,7 +416,12 @@ export function simulateLight(grid: PlacementGrid, sources: LightSource[], mirro
   const lookup = buildLookup(sources, mirrors, prisms, containers)
 
   let prismOutputs = new Map<string, ResourceDefinition | null>(prisms.map((p) => [p.id, null]))
-  let pass = tracePass(grid, lookup, sources, prisms, prismOutputs)
+  // Effektive Output-Richtung je Prisma — Default = die per Klick gewählte Rotation
+  // (`outputDirection`), beim Dreieck ab dem Auflösungs-Durchlauf ggf. durch die automatisch
+  // abgeleitete freie Ecke überschrieben (siehe deriveTriangleOutputDirection()) und dann NIE
+  // wieder geändert (dieselbe monotone Sperre wie bei `prismOutputs`, siehe Datei-Kommentar).
+  let emitDirections = new Map<string, HexDirection>(prisms.map((p) => [p.id, p.outputDirection]))
+  let pass = tracePass(grid, lookup, sources, prisms, prismOutputs, emitDirections)
 
   // Obergrenze rein aus der Anzahl der Prismen abgeleitet: dank der monotonen Sperre (siehe
   // Datei-Kommentar) muss JEDER Durchlauf, der überhaupt noch etwas ändert, mindestens ein
@@ -397,6 +431,7 @@ export function simulateLight(grid: PlacementGrid, sources: LightSource[], mirro
   for (let i = 0; i < maxPasses; i++) {
     let changed = false
     const nextOutputs = new Map(prismOutputs)
+    const nextEmitDirections = new Map(emitDirections)
     for (const prism of prisms) {
       if (prismOutputs.get(prism.id)) continue // bereits aufgelöst -> gesperrt, siehe Datei-Kommentar
       const counts = pass.prismCounts.get(prism.id) ?? { c: 0, m: 0, y: 0 }
@@ -404,12 +439,17 @@ export function simulateLight(grid: PlacementGrid, sources: LightSource[], mirro
       const resolved = prism.prismKind === 'triangle' ? resolveTriangleOutput(colors) : resolveHexagonOutput(counts, colors)
       if (resolved) {
         nextOutputs.set(prism.id, resolved)
+        if (prism.prismKind === 'triangle') {
+          const hitSides = pass.prismSides.get(prism.id) ?? new Set<HexDirection>()
+          nextEmitDirections.set(prism.id, deriveTriangleOutputDirection(prism.outputDirection, hitSides))
+        }
         changed = true
       }
     }
     prismOutputs = nextOutputs
+    emitDirections = nextEmitDirections
     if (!changed) break
-    pass = tracePass(grid, lookup, sources, prisms, prismOutputs)
+    pass = tracePass(grid, lookup, sources, prisms, prismOutputs, emitDirections)
   }
 
   const prismStatus = new Map<string, PrismStatus>()
@@ -419,6 +459,7 @@ export function simulateLight(grid: PlacementGrid, sources: LightSource[], mirro
       presentColors: pass.prismColors.get(prism.id) ?? new Set(),
       sides: pass.prismSides.get(prism.id) ?? new Set(),
       output: prismOutputs.get(prism.id) ?? null,
+      outputDirection: emitDirections.get(prism.id) ?? prism.outputDirection,
     })
   }
 

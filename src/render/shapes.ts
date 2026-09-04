@@ -177,6 +177,24 @@ export function drawHexagon(
   })
 }
 
+/** Nur Outline statt Füllung — z. B. fürs Dreieck-Prisma-Icon auf der "Farbmischung"-Infoseite
+ * (siehe render/colorWheelPanel.ts), das dort als hohles Symbol statt als echtes Bauteil dient. */
+export function drawTriangleOutline(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  size: number,
+  color: string,
+  lineWidth = 1.5,
+) {
+  ctx.save()
+  ctx.strokeStyle = color
+  ctx.lineWidth = lineWidth
+  regularPolygonPath(ctx, x, y, size, 3, 0)
+  ctx.stroke()
+  ctx.restore()
+}
+
 /** Nur Outline statt Füllung — z. B. fürs "Raster erweitern"-Icon, das dieselbe Farbe wie die
  * echten (ebenfalls nur umrissenen) Hex-Rasterzellen tragen soll. */
 export function drawHexagonOutline(
@@ -255,6 +273,42 @@ export function drawStar(
     ctx.closePath()
     ctx.fill()
   })
+}
+
+/** Text mit eigenem, blickdichtem Hintergrund-Chip — bleibt lesbar, egal was dahinterliegt (z. B.
+ * Hover-Tooltips über der Spielszene, siehe main.ts drawPaletteTooltips()). */
+export function drawLabel(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  font: string,
+  color: string,
+  lineHeight: number,
+) {
+  ctx.save()
+  ctx.font = font
+  ctx.textAlign = 'center'
+  const textWidth = ctx.measureText(text).width
+  const paddingX = 6
+  const paddingY = 3
+  const rectX = x - textWidth / 2 - paddingX
+  const rectY = y - lineHeight + paddingY
+  const rectW = textWidth + paddingX * 2
+  const rectH = lineHeight + paddingY
+
+  ctx.fillStyle = 'rgba(4, 5, 8, 0.9)'
+  if (typeof ctx.roundRect === 'function') {
+    ctx.beginPath()
+    ctx.roundRect(rectX, rectY, rectW, rectH, 4)
+    ctx.fill()
+  } else {
+    ctx.fillRect(rectX, rectY, rectW, rectH)
+  }
+
+  ctx.fillStyle = color
+  ctx.fillText(text, x, y)
+  ctx.restore()
 }
 
 /** Nur Outline statt Füllung — z. B. für den hohlen Außenring eines Generators. */

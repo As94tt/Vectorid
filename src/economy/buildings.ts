@@ -83,10 +83,14 @@ export interface Prism {
   /** Rate/Sekunde der erzeugten Farbe, solange das Prisma aktiv (Rezept erfüllt) ist — Basis-Rate
    * (siehe PRISM_SIMPLE_OUTPUT_RATE/PRISM_COMPLEX_OUTPUT_RATE) mal Level-Multiplikator. */
   outputRate: number
-  /** Ein Prisma hat IMMER nur einen dedizierten Output (User-Vorgabe) — strahlt seine
-   * Ausgabefarbe nur noch in DIESE eine der 6 Rasterrichtungen ab, statt (wie vorher) in alle 6
-   * gleichzeitig. Die anderen Seiten bleiben Eingänge. Per Klick drehbar, genau wie ein Spiegel
-   * (`rotatePrism()`), zyklisch 0->1->2->3->4->5->0. */
+  /** Hexagon: der dedizierte Output — strahlt seine Ausgabefarbe nur in DIESE eine der 6
+   * Rasterrichtungen ab, die anderen 5 Seiten bleiben Eingänge, per Klick drehbar wie ein Spiegel
+   * (`rotatePrism()`), zyklisch 0->1->2->3->4->5->0.
+   * Dreieck: dient nur noch als ROTATIONS-ANKER (legt fest, welche 3 der 6 Richtungen überhaupt
+   * Ecken sind, siehe lightSimulation.ts `triangleCornerDirections()`) — die tatsächliche Output-
+   * Ecke wird automatisch aus den 2 aktuell belegten Eingangs-Ecken abgeleitet (siehe dort
+   * `deriveTriangleOutputDirection()`), Klick dreht hier also nur den Anker, nicht mehr direkt
+   * den Output. */
   outputDirection: HexDirection
 }
 

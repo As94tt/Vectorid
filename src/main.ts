@@ -62,7 +62,7 @@ import {
   type PaletteKind,
 } from './render/buildingRender'
 import { buildHudButtons, drawHud, hitTestButton, HUD_HEIGHT, type HudButton } from './render/hud'
-import { buildWheelLayout, drawColorWheelPanel, drawLabel, hitTestWheelClose, hitTestWheelSwatch, type WheelSwatch } from './render/colorWheelPanel'
+import { buildWheelLayout, drawColorWheelPanel, hitTestWheelClose, hitTestWheelSwatch, type WheelSwatch } from './render/colorWheelPanel'
 import {
   buildTowerPalette,
   drawTowerEntity,
@@ -75,7 +75,7 @@ import {
 } from './render/towerRender'
 import { getEffectiveTowerStats, createTower, getTowerDefinition, towerUpgradeCost, TOWER_MAX_LEVEL, type PlacedTower, type TowerKind } from './towerdefense/towers'
 import { getResource, RESOURCES } from './data/resources'
-import { drawHexagon } from './render/shapes'
+import { drawHexagon, drawLabel } from './render/shapes'
 import { drawPath, type Point } from './towerdefense/path'
 import { updateProjectiles, updateTowers, pruneVisualEffects, type Projectile, type VisualEffect } from './towerdefense/combat'
 import { createEnemy, pruneEnemies, tickEnemy, type Enemy } from './towerdefense/enemies'
@@ -555,7 +555,7 @@ canvas.addEventListener('pointerdown', (e) => {
 
   // Farbwheel-Panel blockiert alle anderen Interaktionen, solange es offen ist.
   if (wheelMode !== 'closed') {
-    if (hitTestWheelClose(width, pos.x, pos.y)) {
+    if (hitTestWheelClose(width, height, pos.x, pos.y)) {
       wheelMode = 'closed'
       ammoTargetTowerId = null
       return

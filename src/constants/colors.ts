@@ -23,3 +23,15 @@ export const COLORS = {
 } as const
 
 export type ColorToken = (typeof COLORS)[keyof typeof COLORS]
+
+/** Für Text/Text-Icons, die sonst 1:1 in einer Ressourcenfarbe eingefärbt würden (siehe
+ * render/referencePanels.ts, render/colorWheelPanel.ts): sehr dunkle Farben wie Black (#000000)
+ * oder Blue (#0000FF) wären auf dem fast-schwarzen Panel-Hintergrund unlesbar — fällt dann auf
+ * `textBright` zurück, sonst bleibt die Ressourcenfarbe erhalten. */
+export function readableTextColor(hex: string): string {
+  const r = parseInt(hex.slice(1, 3), 16)
+  const g = parseInt(hex.slice(3, 5), 16)
+  const b = parseInt(hex.slice(5, 7), 16)
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+  return luminance < 0.35 ? COLORS.textBright : hex
+}

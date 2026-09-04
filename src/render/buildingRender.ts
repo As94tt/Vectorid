@@ -139,14 +139,16 @@ function drawPrismPorts(
   }
 }
 
-/** Dreieck (mischt aus 2-3 benannten Farben) oder Fünfeck (mischt aus roher C/M/Y-Summe) — Form
- * zeigt die Misch-METHODE, keine Tier-Obergrenze mehr (siehe data/resources.ts). Gefüllt mit der
+/** Dreieck (mischt aus 2 benannten Farben) oder Hexagon (mischt aus roher C/M/Y-Summe oder 3
+ * benannten Farben) — Form zeigt die Misch-METHODE (siehe data/resources.ts). Gefüllt mit der
  * erzeugten Farbe, sobald ein Rezept erfüllt ist (sichtbare Reaktion), sonst weiß/unkonfiguriert.
  * Pulsiert sanft, solange aktiv. Der Ring um den Output-Port (siehe drawPrismPorts()) zeigt, in
- * welche der 6 Richtungen das Prisma seine Ausgabe gerade abstrahlt — per Klick drehbar wie ein
- * Spiegel (`rotatePrism()` in economy/buildings.ts). */
+ * welche Richtung das Prisma seine Ausgabe gerade abstrahlt — beim Hexagon per Klick drehbar wie
+ * ein Spiegel (`rotatePrism()`), beim Dreieck automatisch die freie Ecke (siehe status.output-
+ * Direction/deriveTriangleOutputDirection() in lightSimulation.ts), Klick dreht dort nur noch den
+ * Anker (welche 3 der 6 Richtungen überhaupt Ecken sind). */
 /** Dreht das Dreieck so, dass seine 3 Ecken exakt auf `outputDirection` und dessen beiden
- * eckengenauen Nachbarn (±2, siehe lightSimulation.ts `isTriangleInputSide()`) zeigen — hergeleitet
+ * eckengenauen Nachbarn (±2, siehe lightSimulation.ts `isTriangleCorner()`) zeigen — hergeleitet
  * aus HEX_DIRECTION_ANGLE_DEG (Pixel-Winkel je Richtung) und getPolygonVertices()' Konvention
  * (Ecke 0 liegt bei `rotation - 90°`): `rotation = HEX_DIRECTION_ANGLE_DEG[outputDirection] + 90°`
  * legt Ecke 0 exakt auf die Output-Richtung, die beiden anderen Ecken (je 120°/240° versetzt)
@@ -163,9 +165,12 @@ export function drawPrismEntity(ctx: CanvasRenderingContext2D, prism: Prism, cen
   const glow = active ? 18 * pulse : 8
 
   if (prism.prismKind === 'triangle') {
+    // `prism.outputDirection` ist nur noch der Rotations-ANKER (legt fest, welche 3 der 6
+    // Richtungen überhaupt Ecken sind) — welche dieser 3 Ecken GERADE der Output ist, kommt aus
+    // `status.outputDirection` (siehe lightSimulation.ts deriveTriangleOutputDirection()).
     drawTriangle(ctx, center.x, center.y, size, color, triangleRotationForOutput(prism.outputDirection), glow)
     const corners: HexDirection[] = [prism.outputDirection, ((prism.outputDirection + 2) % 6) as HexDirection, ((prism.outputDirection + 4) % 6) as HexDirection]
-    drawPrismPorts(ctx, center, status.sides, prism.outputDirection, color, active, corners)
+    drawPrismPorts(ctx, center, status.sides, status.outputDirection, color, active, corners)
   } else {
     drawHexagon(ctx, center.x, center.y, size, color, 0, glow)
     drawPrismPorts(ctx, center, status.sides, prism.outputDirection, color, active)

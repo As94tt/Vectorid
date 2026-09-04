@@ -2,15 +2,13 @@
 // hier — siehe render/combatRender.ts. Position wird NICHT gespeichert, sondern bei Bedarf aus
 // `progress` über getPointAtProgress() abgeleitet (siehe towerdefense/path.ts).
 //
-// Kern-Mechanik (User-Vorgabe, ersetzt die vorherige "C/M/Y-Mischungsverhältnis bestimmt Status"-
-// Runde komplett): JEDE der 16 Kampf-Farben (Tier 1-5, Lumen/Prisma ausgenommen) hat ihren EIGENEN,
+// Kern-Mechanik: JEDE der 14 Kampf-Farben (Tier 1-5, Lumen/Prisma ausgenommen) hat ihren EIGENEN,
 // festen Effekt, der bei einem Treffer direkt angewendet wird (siehe ammoEffects.ts für die
-// Anwendungs-Logik je Farbe) — kein Ableiten aus einem Mischverhältnis mehr. Die meisten Tier-2/4-
+// Anwendungs-Logik je Farbe, exakt nach den Referenzbildern Assets/ColorEffects.png). Die meisten
 // Effekte sammeln dafür Stacks auf dem Gegner, die hier als Felder + Verfalls-/Tick-Logik leben.
 //
 // Alle konkreten Zahlenwerte (max. DPS, Slow-Stärke, Radien, Bonusschaden, ...) sind — wie überall
-// in diesem Projekt — Platzhalter-Balancing: die Tabelle des Users gibt Mechanik + Verhältnisse
-// vor (z. B. "bei 10 Stacks maximaler Schaden"), aber keine absoluten Zahlen.
+// in diesem Projekt — Platzhalter-Balancing.
 
 /** Tier-2-Stacks (Blue/Red/Green): 0 bis MAX, verlieren automatisch 1 Stack/Sekunde. */
 export const TIER2_STACK_MAX = 10
@@ -19,20 +17,36 @@ export const STACK_DECAY_PER_SECOND = 1
 export const RED_BURN_MAX_DPS = 5 // bei TIER2_STACK_MAX Stacks
 export const GREEN_POISON_MAX_DPS = 6 // bei TIER2_STACK_MAX Stacks
 
-/** Cerulean (Freeze) / Violet (Explosion): 0-30, kein Verfall vor Auslösung, danach zurückgesetzt. */
-export const TIER4_LOW_STACK_MAX = 30
+/** Cerulean (Freeze): 0-30, kein Verfall vor Auslösung, danach zurückgesetzt. */
+export const CERULEAN_STACK_MAX = 30
 export const CERULEAN_FREEZE_DURATION = 1
-export const VIOLET_EXPLOSION_DAMAGE_FRACTION = 0.03 // 3% der maximalen Lebenspunkte des auslösenden Gegners
-export const VIOLET_EXPLOSION_RADIUS = 60
-export const AQUAMARINE_SPREAD_RADIUS = 70
-export const AQUAMARINE_BASE_SPREAD_FRACTION = 0.5
 
-/** Fuchsia (Vulnerability) / Amber (Permanent Burn) / Chartreuse (Scaling Chain): 0-100, permanent. */
-export const TIER4_HIGH_STACK_MAX = 100
-export const FUCHSIA_MAX_VULNERABILITY = 0.1 // +10% erlittener Schaden bei 100 Stacks
-export const AMBER_MAX_DPS_FRACTION = 0.01 // 1% der maximalen Lebenspunkte/Sekunde bei 100 Stacks
-export const CHARTREUSE_MAX_JUMPS = 10 // bei 100 Stacks
+/** Violet (Vulnerability): 0-100, permanent (kein Verfall). */
+export const VIOLET_STACK_MAX = 100
+export const VIOLET_MAX_VULNERABILITY = 0.1 // +10% erlittener Schaden bei VIOLET_STACK_MAX Stacks
+
+/** Chartreuse (Stack Spread): kein eigener Stack-Pool — spreadet stattdessen bis zu
+ * CHARTREUSE_SPREAD_FRACTION der VORHANDENEN Cerulean-/Violet-Stacks (Tier 3) des Ziels auf
+ * Gegner in der Nähe. Spread-Kopien dürfen nicht noch einmal weiterverbreitet werden (siehe
+ * `tier3SpreadBlock`), das verhindert eine Kettenreaktion. */
+export const CHARTREUSE_SPREAD_RADIUS = 70
+export const CHARTREUSE_SPREAD_FRACTION = 0.5
+
+/** Aquamarine (Pull): kein Stack — zieht Gegner in der Nähe pro Treffer ein Stück Richtung
+ * Trefferpunkt (als Fortschritts-Angleichung entlang des Pfads, da Positionen nur über
+ * `progress` existieren), sodass sie sich mit der Zeit zusammenballen. */
+export const AQUAMARINE_PULL_RADIUS = 70
+export const AQUAMARINE_PULL_STRENGTH = 0.12 // Anteil des Fortschritts-Abstands, der pro Treffer aufgeholt wird
+
+/** Fuchsia (Scaling Chain Lightning): 0-100, permanent — mehr Stacks = mehr Sprünge. */
+export const FUCHSIA_STACK_MAX = 100
+export const FUCHSIA_MAX_JUMPS = 10 // bei FUCHSIA_STACK_MAX Stacks
 export const CHAIN_LIGHTNING_RADIUS = 70
+
+/** Amber (Explosion): 0-30, kein Verfall vor Auslösung, danach zurückgesetzt. */
+export const AMBER_STACK_MAX = 30
+export const AMBER_EXPLOSION_DAMAGE_FRACTION = 0.03 // 3% der maximalen Lebenspunkte des auslösenden Gegners
+export const AMBER_EXPLOSION_RADIUS = 60
 
 export const YELLOW_CHAIN_JUMPS = 3
 
@@ -46,15 +60,12 @@ export const BLUE_MAX_SLOW_REDUCTION = 0.5 // bei TIER2_STACK_MAX Blue-Stacks
 export const BLACK_STACK_DURATION = 5
 export const BLACK_THRESHOLD_PER_STACK = 0.001 // 0.1 Prozentpunkte als Bruchteil (0-1)
 
-/** White (Overload) — Gegenstück zu Black: statt einer schleichenden Execute-Schwelle ein
- * einmaliger Burst aus echtem (rüstungs-/Vulnerability-ignorierendem) Schaden, sobald genug
- * Stacks erreicht sind, danach Reset. Stacks verfallen wie bei Black gemeinsam nach `WHITE_STACK_
- * DURATION` Sekunden ohne Treffer. */
-export const WHITE_STACK_DURATION = 5
-export const WHITE_STACK_TRIGGER = 10
-export const WHITE_BURST_FRACTION = 0.08 // 8% der maximalen Lebenspunkte als echter Schaden je Auslösung
+/** White (Purge Burst): verzehrt sofort ALLE vorhandenen Farb-Stacks des Ziels (siehe
+ * applyWhite() in ammoEffects.ts) und wandelt sie in einen einmaligen Schadens-Burst um — kein
+ * eigener Stack-Pool, kein Verfall, wirkt instant bei Treffer. */
+export const WHITE_PURGE_FRACTION_PER_POOL = 0.05 // % max. HP pro voll gefülltem, verzehrtem Stack-Pool
 
-export type Tier4StackKey = 'cerulean' | 'violet' | 'fuchsia' | 'amber' | 'chartreuse'
+export type Tier3StackKey = 'cerulean' | 'violet'
 
 export interface Enemy {
   id: string
@@ -75,23 +86,22 @@ export interface Enemy {
   redStacks: number
   greenStacks: number
 
-  // Tier 4
+  // Tier 3
   ceruleanStacks: number // 0-30, Freeze-Trigger
   frozenUntil: number
-  violetStacks: number // 0-30, Explosions-Trigger
-  fuchsiaStacks: number // 0-100, permanent
-  amberStacks: number // 0-100, permanent
-  chartreuseStacks: number // 0-100, permanent
-  /** Welche Tier-4-Stack-Typen dieser Gegner per Aquamarine-Spread EMPFANGEN hat — die dürfen
-   * nicht noch einmal per Aquamarine weiterverbreitet werden (verhindert Kettenreaktionen). */
-  aquamarineSpreadBlock: Set<Tier4StackKey>
+  violetStacks: number // 0-100, permanent (Vulnerability)
+  /** Welche Tier-3-Stack-Typen dieser Gegner per Chartreuse-Spread EMPFANGEN hat — die dürfen
+   * nicht noch einmal weiterverbreitet werden (verhindert eine Kettenreaktion). */
+  tier3SpreadBlock: Set<Tier3StackKey>
 
-  // Tier 5 — Black/White: Stacks verfallen jeweils gemeinsam BLACK_/WHITE_STACK_DURATION
-  // Sekunden nach dem letzten Treffer.
+  // Tier 4
+  fuchsiaStacks: number // 0-100, permanent (Scaling Chain Lightning)
+  amberStacks: number // 0-30, Explosions-Trigger
+
+  // Tier 5 — Black: Stacks verfallen gemeinsam BLACK_STACK_DURATION Sekunden nach dem letzten
+  // Treffer. White hat keinen eigenen Stack-Pool (siehe WHITE_PURGE_FRACTION_PER_POOL).
   blackStacks: number
   blackStacksExpireAt: number
-  whiteStacks: number
-  whiteStacksExpireAt: number
 }
 
 let enemyCounter = 0
@@ -111,14 +121,11 @@ export function createEnemy(hp = 30, baseSpeed = 0.09, armor = 0.1): Enemy {
     ceruleanStacks: 0,
     frozenUntil: 0,
     violetStacks: 0,
+    tier3SpreadBlock: new Set(),
     fuchsiaStacks: 0,
     amberStacks: 0,
-    chartreuseStacks: 0,
-    aquamarineSpreadBlock: new Set(),
     blackStacks: 0,
     blackStacksExpireAt: 0,
-    whiteStacks: 0,
-    whiteStacksExpireAt: 0,
   }
 }
 
@@ -133,16 +140,15 @@ export function speedFactor(enemy: Enemy, elapsedSeconds: number): number {
   return Math.max(0.1, 1 - reduction)
 }
 
-/** Wendet Schaden an — gemindert durch Rüstung, verstärkt durch Fuchsias Vulnerability (gilt für
- * ALLE Schadensquellen, siehe User-Tabelle: "Schaden, den das Ziel aus allen Schadensquellen erhält"). */
+/** Wendet Schaden an — gemindert durch Rüstung, verstärkt durch Violets Vulnerability (gilt für
+ * ALLE Schadensquellen, siehe ColorEffects.png: "Increases damage taken"). */
 export function dealDamage(enemy: Enemy, rawDamage: number) {
-  const vulnerability = 1 + (enemy.fuchsiaStacks / TIER4_HIGH_STACK_MAX) * FUCHSIA_MAX_VULNERABILITY
+  const vulnerability = 1 + (enemy.violetStacks / VIOLET_STACK_MAX) * VIOLET_MAX_VULNERABILITY
   enemy.hp -= rawDamage * (1 - enemy.armor) * vulnerability
 }
 
 /** Pro Frame: Bewegung (abzüglich Slow/Freeze) + Stack-Verfall (Blue/Red/Green je 1/Sekunde,
- * Black gemeinsam nach 5s) + laufender DoT-Schaden (Red-Burn/Green-Poison/Amber-Permanent-Burn).
- * Muss vor dem Turm-/Projektil-Update im Combat-Tick laufen. */
+ * Black gemeinsam nach 5s) + laufender DoT-Schaden (Red-Burn/Green-Poison). */
 export function tickEnemy(enemy: Enemy, dt: number, elapsedSeconds: number) {
   enemy.progress += enemy.baseSpeed * speedFactor(enemy, elapsedSeconds) * dt
 
@@ -152,10 +158,8 @@ export function tickEnemy(enemy: Enemy, dt: number, elapsedSeconds: number) {
 
   if (enemy.redStacks > 0) dealDamage(enemy, (enemy.redStacks / TIER2_STACK_MAX) * RED_BURN_MAX_DPS * dt)
   if (enemy.greenStacks > 0) dealDamage(enemy, (enemy.greenStacks / TIER2_STACK_MAX) * GREEN_POISON_MAX_DPS * dt)
-  if (enemy.amberStacks > 0) dealDamage(enemy, (enemy.amberStacks / TIER4_HIGH_STACK_MAX) * AMBER_MAX_DPS_FRACTION * enemy.maxHp * dt)
 
   if (enemy.blackStacksExpireAt <= elapsedSeconds) enemy.blackStacks = 0
-  if (enemy.whiteStacksExpireAt <= elapsedSeconds) enemy.whiteStacks = 0
 }
 
 /** Für die Statuspunkte-Anzeige (siehe render/combatRender.ts): alle aktuell aktiven Effekte mit
@@ -166,13 +170,11 @@ export function activeStatusEffects(enemy: Enemy, elapsedSeconds: number): { res
   if (enemy.blueStacks > 0) list.push({ resourceId: 'blue', fraction: enemy.blueStacks / TIER2_STACK_MAX })
   if (enemy.redStacks > 0) list.push({ resourceId: 'red', fraction: enemy.redStacks / TIER2_STACK_MAX })
   if (enemy.greenStacks > 0) list.push({ resourceId: 'green', fraction: enemy.greenStacks / TIER2_STACK_MAX })
-  if (enemy.ceruleanStacks > 0) list.push({ resourceId: 'cerulean', fraction: enemy.ceruleanStacks / TIER4_LOW_STACK_MAX })
-  if (enemy.violetStacks > 0) list.push({ resourceId: 'violet', fraction: enemy.violetStacks / TIER4_LOW_STACK_MAX })
-  if (enemy.fuchsiaStacks > 0) list.push({ resourceId: 'fuchsia', fraction: enemy.fuchsiaStacks / TIER4_HIGH_STACK_MAX })
-  if (enemy.amberStacks > 0) list.push({ resourceId: 'amber', fraction: enemy.amberStacks / TIER4_HIGH_STACK_MAX })
-  if (enemy.chartreuseStacks > 0) list.push({ resourceId: 'chartreuse', fraction: enemy.chartreuseStacks / TIER4_HIGH_STACK_MAX })
+  if (enemy.ceruleanStacks > 0) list.push({ resourceId: 'cerulean', fraction: enemy.ceruleanStacks / CERULEAN_STACK_MAX })
+  if (enemy.violetStacks > 0) list.push({ resourceId: 'violet', fraction: enemy.violetStacks / VIOLET_STACK_MAX })
+  if (enemy.fuchsiaStacks > 0) list.push({ resourceId: 'fuchsia', fraction: enemy.fuchsiaStacks / FUCHSIA_STACK_MAX })
+  if (enemy.amberStacks > 0) list.push({ resourceId: 'amber', fraction: enemy.amberStacks / AMBER_STACK_MAX })
   if (enemy.blackStacksExpireAt > elapsedSeconds) list.push({ resourceId: 'black', fraction: Math.min(1, enemy.blackStacks / 10) })
-  if (enemy.whiteStacksExpireAt > elapsedSeconds) list.push({ resourceId: 'white', fraction: enemy.whiteStacks / WHITE_STACK_TRIGGER })
   return list
 }
 
