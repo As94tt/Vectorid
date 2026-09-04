@@ -12,7 +12,7 @@ import { COLORS, readableTextColor } from '../constants/colors'
 import { getResource, RESOURCES } from '../data/resources'
 import { COLOR_EFFECT_INFO } from '../towerdefense/ammoEffects'
 import { TOWER_DEFINITIONS } from '../towerdefense/towers'
-import { drawCircle, drawCircleOutline } from './shapes'
+import { drawCircle, drawCircleOutline, drawHexagonOutline, drawTriangleOutline } from './shapes'
 import { drawTowerPreview, TOWER_UNSELECTED_COLOR } from './towerRender'
 
 const PANEL_FILL = '#0b0d12'
@@ -166,25 +166,42 @@ export function drawTowerReferencePanel(ctx: CanvasRenderingContext2D, width: nu
   })
 }
 
-/** Dreieck-Rezept als kurze Zeile ("△ A + B"), falls vorhanden. */
-function triangleLine(resource: (typeof RESOURCES)[number]): string | null {
-  if (!resource.triangleRecipe) return null
-  return `△ ${resource.triangleRecipe.map((id) => getResource(id).name).join(' + ')}`
+interface RecipeEntry {
+  icon: 'triangle' | 'hexagon'
+  text: string
 }
 
-/** Hexagon-Rezept als kurze Zeile ("⬡ M+2C+Y" bzw. "⬡ A + B + C" bei den benannten Tier-5-
- * Rezepten), falls vorhanden. */
-function hexagonLine(resource: (typeof RESOURCES)[number]): string | null {
-  if (resource.hexagonNamedRecipe) return `⬡ ${resource.hexagonNamedRecipe.map((id) => getResource(id).name).join(' + ')}`
+/** Dreieck-Rezept ("A + B"), falls vorhanden. */
+function triangleRecipeEntry(resource: (typeof RESOURCES)[number]): RecipeEntry | null {
+  if (!resource.triangleRecipe) return null
+  return { icon: 'triangle', text: resource.triangleRecipe.map((id) => getResource(id).name).join(' + ') }
+}
+
+/** Hexagon-Rezept ("M+2C+Y" bzw. "A + B + C" bei den benannten Tier-5-Rezepten), falls vorhanden.
+ * Tier 1 hat zwar technisch ein (triviales, 1-teiliges) `hexagonRecipe` fürs Munitions-System
+ * (siehe resources.ts), das ist aber keine ECHTE Mischung — die Guide-Liste zeigt dort stattdessen
+ * "Purchased" (siehe drawColorGuideList()), daher hier bewusst `null` für Tier 1. */
+function hexagonRecipeEntry(resource: (typeof RESOURCES)[number]): RecipeEntry | null {
+  if (resource.tier === 1) return null
+  if (resource.hexagonNamedRecipe) return { icon: 'hexagon', text: resource.hexagonNamedRecipe.map((id) => getResource(id).name).join(' + ') }
   if (resource.hexagonRecipe) {
     const { c, m, y } = resource.hexagonRecipe
     const parts: string[] = []
     if (m > 0) parts.push(m === 1 ? 'M' : `${m}M`)
     if (c > 0) parts.push(c === 1 ? 'C' : `${c}C`)
     if (y > 0) parts.push(y === 1 ? 'Y' : `${y}Y`)
-    return `⬡ ${parts.join('+')}`
+    return { icon: 'hexagon', text: parts.join('+') }
   }
   return null
+}
+
+/** Kleines, gezeichnetes (statt Unicode-Glyphen — die rendern bei 9-10px in vielen Fonts nur als
+ * unklarer Klecks, siehe User-Feedback "Qualität der Darstellung ist eine Katastrophe") Dreieck-
+ * bzw. Hexagon-Symbol vor einer Rezept-Zeile, mittig auf `textY` (Text-Baseline) ausgerichtet. */
+function drawRecipeIcon(ctx: CanvasRenderingContext2D, icon: RecipeEntry['icon'], x: number, textY: number) {
+  const cy = textY - 3
+  if (icon === 'triangle') drawTriangleOutline(ctx, x, cy + 1, 4, COLORS.textMid, 1.2)
+  else drawHexagonOutline(ctx, x, cy, 3.6, COLORS.textMid, 1.2)
 }
 
 /** Kombinierter Farb-Guide fürs feste Mittel-Feld zwischen Economy und Defense (siehe main.ts
@@ -206,7 +223,9 @@ export function drawColorGuideList(ctx: CanvasRenderingContext2D, x: number, y: 
   for (const resource of resources) {
     const effect = COLOR_EFFECT_INFO[resource.id]
     const showBoth = resource.tier === 3 || resource.tier === 4
-    const recipeLines = showBoth ? [triangleLine(resource), hexagonLine(resource)].filter((l): l is string => !!l) : [triangleLine(resource) ?? hexagonLine(resource) ?? 'purchased']
+    const recipeEntries = showBoth
+      ? [triangleRecipeEntry(resource), hexagonRecipeEntry(resource)].filter((r): r is RecipeEntry => !!r)
+      : [triangleRecipeEntry(resource) ?? hexagonRecipeEntry(resource)].filter((r): r is RecipeEntry => !!r)
 
     const swatchY = cursorY + 6
     drawCircle(ctx, x + 7, swatchY, 7, resource.color, 6)
@@ -217,14 +236,22 @@ export function drawColorGuideList(ctx: CanvasRenderingContext2D, x: number, y: 
     ctx.fillText(resource.name, x + 20, swatchY + 4)
     cursorY = swatchY + lineHeight
 
-    ctx.fillStyle = COLORS.textMid
     ctx.font = '9px monospace'
-    for (const line of recipeLines) {
-      ctx.fillText(line, x + 20, cursorY)
+    if (recipeEntries.length === 0) {
+      ctx.fillStyle = COLORS.textDim
+      ctx.fillText('Purchased', x + 20, cursorY)
       cursorY += lineHeight
+    } else {
+      for (const entry of recipeEntries) {
+        drawRecipeIcon(ctx, entry.icon, x + 7, cursorY)
+        ctx.fillStyle = COLORS.textMid
+        ctx.fillText(entry.text, x + 20, cursorY)
+        cursorY += lineHeight
+      }
     }
 
     if (effect) {
+      ctx.fillStyle = COLORS.textMid
       const lines = wrapLines(ctx, `${effect.name}: ${effect.description}`, width - 20, 2)
       lines.forEach((line) => {
         ctx.fillText(line, x + 20, cursorY)
@@ -234,6 +261,13 @@ export function drawColorGuideList(ctx: CanvasRenderingContext2D, x: number, y: 
 
     cursorY += rowGap
     if (cursorY > y + height) break // Sicherheitsbremse, sollte bei normaler Fenstergröße nie greifen
+
+    ctx.strokeStyle = COLORS.gridLine
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.moveTo(x, cursorY - rowGap / 2)
+    ctx.lineTo(x + width, cursorY - rowGap / 2)
+    ctx.stroke()
   }
 
   ctx.restore()

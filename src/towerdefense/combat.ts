@@ -11,7 +11,7 @@ import { TOWER_UNSELECTED_COLOR } from '../render/towerRender'
 import { applyAmmoEffect } from './ammoEffects'
 import { dealDamage, type Enemy } from './enemies'
 import { getPointAtProgress, type Point } from './path'
-import { getEffectiveTowerStats, getTowerDefinition, type PlacedTower, type TowerDefinition, type TowerKind } from './towers'
+import { getEffectiveTowerStats, getTowerDefinition, loadoutKey, type PlacedTower, type TowerDefinition, type TowerKind } from './towers'
 
 export interface Projectile {
   id: string
@@ -21,6 +21,10 @@ export interface Projectile {
   speed: number
   damage: number
   resourceId: string | null
+  /** Welche Turmart dieses Projektil abgefeuert hat — trifft es, wird der Schaden auf diese
+   * Konfiguration angerechnet (siehe `treatHit()`/main.ts drawTowerLoadoutSummary()), da das
+   * Projektil sonst (einmal unterwegs) keinen Bezug mehr zu seinem Ursprungsturm hat. */
+  towerKind: TowerKind
   /** Nur Cannon: Radius, in dem beim Einschlag zusätzlich (reduzierter) Schaden verteilt wird. */
   splashRadius?: number
 }
@@ -46,9 +50,30 @@ function angleBetween(a: Point, b: Point): number {
 /** Ein Treffer: Schaden anwenden + der Farb-Effekt der Munition wird ausgelöst (siehe
  * ammoEffects.ts). `allEnemies`/`pathPixels`/`elapsedSeconds` werden nur für die Effekte
  * gebraucht, die andere Gegner in der Nähe betreffen (Chain Lightning, Stack Spread, Explosion)
- * bzw. einen Zeitstempel brauchen (Cyan-Slow, Freeze, Black-Execute). */
-function treatHit(target: Enemy, damage: number, resourceId: string | null, allEnemies: Enemy[], pathPixels: Point[], elapsedSeconds: number) {
-  dealDamage(target, damage)
+ * bzw. einen Zeitstempel brauchen (Cyan-Slow, Freeze, Black-Execute).
+ *
+ * Zählt den tatsächlich abgezogenen Schaden (siehe dealDamage()) auf `damageByLoadout` (siehe
+ * towers.ts loadoutKey()) — bewusst NUR der direkte Treffer-Schaden dieses Schusses, NICHT
+ * zusätzlicher Folgeschaden aus applyAmmoEffect() (z. B. Magentas Bonus-Schaden, Ambers Explosion,
+ * Whites Purge-Burst, oder die laufenden Burn-/Poison-Ticks in enemies.ts tickEnemy()) — diese
+ * ließen sich nicht mehr eindeutig auf EINEN Turm zurückführen (mehrere Türme können z. B.
+ * denselben Stack-Pool auffrischen). Die Übersicht zeigt daher den reinen Treffer-Schaden, nicht
+ * die volle Gesamtschadenssumme. */
+function treatHit(
+  target: Enemy,
+  damage: number,
+  resourceId: string | null,
+  allEnemies: Enemy[],
+  pathPixels: Point[],
+  elapsedSeconds: number,
+  towerKind: TowerKind,
+  damageByLoadout: Map<string, number>,
+) {
+  const dealt = dealDamage(target, damage)
+  if (resourceId) {
+    const key = loadoutKey(towerKind, resourceId)
+    damageByLoadout.set(key, (damageByLoadout.get(key) ?? 0) + dealt)
+  }
   applyAmmoEffect(resourceId, damage, target, allEnemies, pathPixels, elapsedSeconds)
 }
 
@@ -91,11 +116,12 @@ function fireProjectile(
   damage: number,
   speed: number,
   resourceId: string | null,
+  towerKind: TowerKind,
   splashRadius: number | undefined,
   projectiles: Projectile[],
 ) {
   projectileCounter += 1
-  projectiles.push({ id: `proj-${projectileCounter}`, x: center.x, y: center.y, targetId: target.id, speed, damage, resourceId, splashRadius })
+  projectiles.push({ id: `proj-${projectileCounter}`, x: center.x, y: center.y, targetId: target.id, speed, damage, resourceId, towerKind, splashRadius })
 }
 
 function createRingEffect(center: Point, radius: number, elapsedSeconds: number, color: string): VisualEffect {
@@ -119,11 +145,12 @@ function updatePulse(
   elapsedSeconds: number,
   pathPixels: Point[],
   effects: VisualEffect[],
+  damageByLoadout: Map<string, number>,
 ) {
   const targets = targetsInRange(enemies, center, def.range, pathPixels)
   if (targets.length === 0 || tower.cooldown > 0) return
 
-  for (const target of targets) treatHit(target, def.damage, tower.resourceId, enemies, pathPixels, elapsedSeconds)
+  for (const target of targets) treatHit(target, def.damage, tower.resourceId, enemies, pathPixels, elapsedSeconds, tower.kind, damageByLoadout)
   tower.cooldown = def.fireInterval
   effects.push(createRingEffect(center, def.range, elapsedSeconds, colorFor(tower.resourceId)))
 }
@@ -149,7 +176,7 @@ function updateProjectileTower(
 
   const chosen = targets.slice(0, def.projectileCount ?? 1)
   for (const target of chosen) {
-    fireProjectile(center, target, def.damage, def.projectileSpeed ?? 400, tower.resourceId, def.splashRadius, projectiles)
+    fireProjectile(center, target, def.damage, def.projectileSpeed ?? 400, tower.resourceId, tower.kind, def.splashRadius, projectiles)
   }
   tower.cooldown = def.fireInterval
 }
@@ -162,6 +189,7 @@ function updateFlamethrower(
   enemies: Enemy[],
   pathPixels: Point[],
   elapsedSeconds: number,
+  damageByLoadout: Map<string, number>,
 ) {
   const targets = targetsInRange(enemies, center, def.range, pathPixels)
   tower.active = targets.length > 0
@@ -177,13 +205,21 @@ function updateFlamethrower(
     let diff = Math.abs(angle - aimAngle)
     if (diff > Math.PI) diff = Math.PI * 2 - diff
     if (diff > halfCone) continue
-    treatHit(target, def.damage, tower.resourceId, enemies, pathPixels, elapsedSeconds)
+    treatHit(target, def.damage, tower.resourceId, enemies, pathPixels, elapsedSeconds, tower.kind, damageByLoadout)
   }
   tower.cooldown = def.fireInterval
 }
 
 /** Raute/Beam: verriegelt ein Ziel und tickt Dauerschaden, solange es lebt und in Reichweite bleibt. */
-function updateBeam(tower: PlacedTower, def: TowerDefinition, center: Point, enemies: Enemy[], pathPixels: Point[], elapsedSeconds: number) {
+function updateBeam(
+  tower: PlacedTower,
+  def: TowerDefinition,
+  center: Point,
+  enemies: Enemy[],
+  pathPixels: Point[],
+  elapsedSeconds: number,
+  damageByLoadout: Map<string, number>,
+) {
   let target = enemies.find((e) => e.id === tower.lockedTargetId && e.hp > 0)
   if (target) {
     const pos = getPointAtProgress(pathPixels, target.progress)
@@ -201,7 +237,7 @@ function updateBeam(tower: PlacedTower, def: TowerDefinition, center: Point, ene
   // Quadrat aussehen. Die Laserlinie selbst (render/combatRender.ts) zeigt die Zielrichtung.
   if (tower.cooldown > 0) return
 
-  treatHit(target, def.damage, tower.resourceId, enemies, pathPixels, elapsedSeconds)
+  treatHit(target, def.damage, tower.resourceId, enemies, pathPixels, elapsedSeconds, tower.kind, damageByLoadout)
   tower.cooldown = def.fireInterval
 }
 
@@ -236,7 +272,7 @@ function updateBurst(
   if (tower.chargeElapsed < (def.chargeTime ?? 1.5)) return
 
   for (let i = 0; i < (def.volleyCount ?? 4); i++) {
-    fireProjectile(center, target, def.damage, def.projectileSpeed ?? 450, tower.resourceId, undefined, projectiles)
+    fireProjectile(center, target, def.damage, def.projectileSpeed ?? 450, tower.resourceId, tower.kind, undefined, projectiles)
   }
   tower.charging = false
   tower.chargeElapsed = 0
@@ -258,6 +294,7 @@ export function updateTowers(
   hasAmmo: (tower: PlacedTower) => boolean,
   projectiles: Projectile[],
   effects: VisualEffect[],
+  damageByLoadout: Map<string, number>,
 ) {
   for (const tower of towers) {
     // Level-Skalierung (siehe towerdefense/towers.ts getEffectiveTowerStats()): überschreibt nur
@@ -276,13 +313,13 @@ export function updateTowers(
 
     switch (tower.kind) {
       case 'pulse':
-        updatePulse(tower, def, center, enemies, elapsedSeconds, pathPixels, effects)
+        updatePulse(tower, def, center, enemies, elapsedSeconds, pathPixels, effects, damageByLoadout)
         break
       case 'flamethrower':
-        updateFlamethrower(tower, def, center, enemies, pathPixels, elapsedSeconds)
+        updateFlamethrower(tower, def, center, enemies, pathPixels, elapsedSeconds, damageByLoadout)
         break
       case 'beam':
-        updateBeam(tower, def, center, enemies, pathPixels, elapsedSeconds)
+        updateBeam(tower, def, center, enemies, pathPixels, elapsedSeconds, damageByLoadout)
         break
       case 'burst':
         updateBurst(tower, def, center, enemies, dt, pathPixels, projectiles)
@@ -306,6 +343,7 @@ export function updateProjectiles(
   elapsedSeconds: number,
   pathPixels: Point[],
   effects: VisualEffect[],
+  damageByLoadout: Map<string, number>,
 ): Projectile[] {
   const remaining: Projectile[] = []
 
@@ -319,14 +357,14 @@ export function updateProjectiles(
     const dist = Math.hypot(dx, dy)
 
     if (dist <= PROJECTILE_HIT_RADIUS) {
-      treatHit(target, proj.damage, proj.resourceId, enemies, pathPixels, elapsedSeconds)
+      treatHit(target, proj.damage, proj.resourceId, enemies, pathPixels, elapsedSeconds, proj.towerKind, damageByLoadout)
 
       if (proj.splashRadius) {
         for (const other of enemies) {
           if (other.id === target.id) continue
           const otherPos = getPointAtProgress(pathPixels, other.progress)
           if (Math.hypot(otherPos.x - targetPos.x, otherPos.y - targetPos.y) <= proj.splashRadius) {
-            treatHit(other, proj.damage * SPLASH_DAMAGE_FACTOR, proj.resourceId, enemies, pathPixels, elapsedSeconds)
+            treatHit(other, proj.damage * SPLASH_DAMAGE_FACTOR, proj.resourceId, enemies, pathPixels, elapsedSeconds, proj.towerKind, damageByLoadout)
           }
         }
         effects.push(createFlashEffect(targetPos, proj.splashRadius, elapsedSeconds, colorFor(proj.resourceId)))

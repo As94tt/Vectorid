@@ -110,6 +110,14 @@ export const TOWER_DEFINITIONS: TowerDefinition[] = [
   },
 ]
 
+/** Identität einer "Konfiguration" (Turmart + Munitionsfarbe) für die Schadens-Übersicht (siehe
+ * main.ts drawTowerLoadoutSummary()/towerdefense/combat.ts treatHit()) — mehrere Türme derselben
+ * Art UND Farbe zählen als EINE Zeile mit gemeinsamem Schadens-Topf, unabhängig von Level oder
+ * Position. */
+export function loadoutKey(kind: TowerKind, resourceId: string): string {
+  return `${kind}|${resourceId}`
+}
+
 export function getTowerDefinition(kind: TowerKind): TowerDefinition {
   const def = TOWER_DEFINITIONS.find((d) => d.kind === kind)
   if (!def) throw new Error(`Unknown tower type: ${kind}`)

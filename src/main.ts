@@ -27,6 +27,7 @@ import {
   DEFENSE_STARTING_GRID_SIZE,
   drawPlacementGrid,
   ECONOMY_STARTING_GRID_SIZE,
+  gridPixelHeight,
   gridPixelWidth,
   hexColumnWidth,
   GRID_EXPAND_COST,
@@ -76,13 +77,13 @@ import {
   TOWER_ICON_SIZE,
   type TowerPaletteItem,
 } from './render/towerRender'
-import { getEffectiveTowerStats, createTower, getTowerDefinition, towerUpgradeCost, TOWER_MAX_LEVEL, type PlacedTower, type TowerKind } from './towerdefense/towers'
+import { getEffectiveTowerStats, createTower, getTowerDefinition, loadoutKey, towerUpgradeCost, TOWER_DEFINITIONS, TOWER_MAX_LEVEL, type PlacedTower, type TowerKind } from './towerdefense/towers'
 import { getResource, RESOURCES } from './data/resources'
 import { drawCircleOutline, drawHexagon, drawLabel } from './render/shapes'
 import { drawPath, pathTotalLength, type Point } from './towerdefense/path'
 import { updateProjectiles, updateTowers, pruneVisualEffects, type Projectile, type VisualEffect } from './towerdefense/combat'
 import { pruneEnemies, tickEnemy, type Enemy } from './towerdefense/enemies'
-import { createWaveState, isBossWave, registerLeak, tickWaveSpawning, BOSS_LUMEN_MULTIPLIER, type WaveState } from './towerdefense/waves'
+import { createWaveState, isBossWave, registerLeak, tickWaveSpawning, waveEnemyHp, BOSS_LUMEN_MULTIPLIER, type WaveState } from './towerdefense/waves'
 import { drawEnemies, drawProjectiles, drawTowerCombatEffects, drawVisualEffects } from './render/combatRender'
 import { drawColorGuideList, drawTowerReferencePanel, drawWelcomePanel, hitTestReferencePanelClose } from './render/referencePanels'
 
@@ -120,7 +121,7 @@ let towersInfoOpen = false
 // Kombinierter Farb-Guide im festen Mittel-Feld zwischen Economy- und Defense-Seite (siehe
 // drawMiddleStrip()) — ersetzt die früheren getrennten "Colors"/"Effekte"-Bildseiten. Bewusst
 // NICHT blockierend: klappt nur den Inhalt des immer vorhandenen Streifens auf/zu.
-let colorGuideOpen = false
+let colorGuideOpen = true
 
 // Einmaliges Tutorial-Popup (User-Vorgabe: "beim ersten starten") — merkt sich per localStorage,
 // ob es schon gezeigt wurde, damit es bei künftigen Besuchen nicht erneut aufploppt (versucht
@@ -201,8 +202,8 @@ function buildScene() {
   defenseZoneX = economyZoneWidth + MIDDLE_STRIP_WIDTH
 
   hudButtons = buildHudButtons(width)
-  paletteItems = buildPalette(56, HUD_HEIGHT + 46, 76)
-  towerPaletteItems = buildTowerPalette(defenseZoneX + 56, HUD_HEIGHT + 46, 68)
+  paletteItems = buildPalette(56, HUD_HEIGHT + 62, 76)
+  towerPaletteItems = buildTowerPalette(defenseZoneX + 56, HUD_HEIGHT + 62, 68)
   wheelSwatches = buildWheelLayout(width, height)
 }
 
@@ -233,7 +234,7 @@ function buildDemoEconomy() {
   // Erweitern nach links (mehr Spalten) und unten (mehr Zeilen) — siehe expandGrid(). originX
   // wird über die tatsächliche Pixel-Breite des Hex-Rasters bestimmt (nicht mehr `cols*cellSize`
   // wie beim quadratischen Raster, siehe gridPixelWidth()).
-  const topMargin = HUD_HEIGHT + 110 // Platz für "ECONOMY"-Label + Kauf-Leiste
+  const topMargin = HUD_HEIGHT + 126 // Platz für "ECONOMY"-Label + Kauf-Leiste
   const rightMargin = 40
   const rightEdge = economyZoneWidth - rightMargin
   placementGrid = {
@@ -325,7 +326,7 @@ function buildDefenseNetwork() {
     rows: DEFENSE_STARTING_GRID_SIZE,
     cellSize,
     originX: defenseZoneX + 48,
-    originY: HUD_HEIGHT + 110,
+    originY: HUD_HEIGHT + 126,
   }
   spawnNode = { col: DEFENSE_STARTING_GRID_SIZE - 1, row: 0 }
   spawnDirection = 3 // zeigt zu Beginn ins Rasterinnere (Spawn sitzt oben-rechts)
@@ -360,6 +361,11 @@ let enemies: Enemy[] = []
 let projectiles: Projectile[] = []
 let visualEffects: VisualEffect[] = []
 let waveState: WaveState = createWaveState()
+/** Summe des tatsächlich abgezogenen Treffer-Schadens je Turm-Konfiguration (Turmart + Munitions-
+ * farbe, siehe towerdefense/towers.ts loadoutKey()) — läuft die ganze Session über weiter (auch
+ * über Wellen hinweg), auch wenn die zugehörigen Türme später abgerissen werden (siehe main.ts
+ * drawTowerLoadoutSummary()). */
+let damageByLoadout = new Map<string, number>()
 const LUMEN_PER_KILL = 2
 
 function resize() {
@@ -1043,17 +1049,95 @@ function drawDefenseNetwork() {
 }
 
 /** Wellenstand rechts neben dem "D E F E N S E"-Label (siehe towerdefense/waves.ts) — Wellen-
- * nummer + Boss-Hinweis (jede 10. Welle) plus Spawn-Fortschritt bzw. Pause-Countdown. */
+ * nummer + Boss-Hinweis (jede 10. Welle) plus Spawn-Fortschritt bzw. Pause-Countdown, sowie
+ * darunter die HP der Gegner dieser Welle (User-Vorgabe) — inkl. Boss-HP, falls vorhanden. */
 function drawWaveStatus() {
   const boss = isBossWave(waveState.currentWave)
   const status =
     waveState.phase === 'spawning' ? `${waveState.enemiesSpawnedInWave}/${waveState.totalInWave} spawned` : `next wave in ${Math.ceil(waveState.pauseTimer)}s`
+  const { regularHp, bossHp } = waveEnemyHp(waveState.currentWave)
+  const hpLine = bossHp !== null ? `HP ${Math.round(regularHp)}  ·  Boss HP ${Math.round(bossHp)}` : `HP ${Math.round(regularHp)}`
 
   ctx!.save()
   ctx!.textAlign = 'right'
   ctx!.font = 'bold 12px monospace'
   ctx!.fillStyle = boss ? '#ffcc33' : COLORS.textBright
   ctx!.fillText(boss ? `WAVE ${waveState.currentWave} — BOSS  ·  ${status}` : `WAVE ${waveState.currentWave}  ·  ${status}`, width - 20, HUD_HEIGHT + 20)
+  ctx!.font = '11px monospace'
+  ctx!.fillStyle = COLORS.textMid
+  ctx!.fillText(hpLine, width - 20, HUD_HEIGHT + 36)
+  ctx!.restore()
+}
+
+interface LoadoutSummaryEntry {
+  kind: TowerKind
+  resourceId: string
+  count: number
+  damage: number
+}
+
+/** Aktuell platzierte Türme, gruppiert nach Konfiguration (Turmart + Munitionsfarbe, siehe
+ * towerdefense/towers.ts loadoutKey()) — EIN Eintrag je Konfiguration, unabhängig davon, wie
+ * viele Türme genau dieser Art/Farbe gerade stehen (User-Vorgabe: "nur 1x pro Art"). Türme ohne
+ * gewählte Munition zählen nicht mit (haben noch keine "Konfiguration"). Sortiert nach Turmart
+ * (Reihenfolge der Kauf-Leiste) dann Ressourcen-Tier, für eine stabile, nicht "springende"
+ * Reihenfolge zwischen Frames. */
+function currentLoadoutSummary(): LoadoutSummaryEntry[] {
+  const byKey = new Map<string, LoadoutSummaryEntry>()
+  for (const tower of towers) {
+    if (!tower.resourceId) continue
+    const key = loadoutKey(tower.kind, tower.resourceId)
+    const existing = byKey.get(key)
+    if (existing) existing.count += 1
+    else byKey.set(key, { kind: tower.kind, resourceId: tower.resourceId, count: 1, damage: damageByLoadout.get(key) ?? 0 })
+  }
+  const kindOrder = TOWER_DEFINITIONS.map((d) => d.kind)
+  const resourceOrder = RESOURCES.map((r) => r.id)
+  return [...byKey.values()].sort((a, b) => {
+    const kindDiff = kindOrder.indexOf(a.kind) - kindOrder.indexOf(b.kind)
+    return kindDiff !== 0 ? kindDiff : resourceOrder.indexOf(a.resourceId) - resourceOrder.indexOf(b.resourceId)
+  })
+}
+
+const LOADOUT_SUMMARY_WIDTH = 230
+
+/** Listet unter dem Defense-Raster (siehe drawWaveStatus() für den Platz darüber, hier ist
+ * genug Raum für eine beliebig lange Liste) je Turm-Konfiguration die Anzahl + den bisher
+ * insgesamt damit angerichteten Treffer-Schaden (User-Vorgabe). */
+function drawTowerLoadoutSummary() {
+  const entries = currentLoadoutSummary()
+  if (entries.length === 0) return
+
+  const x = defenseGrid.originX
+  let y = defenseGrid.originY + gridPixelHeight(defenseGrid) + 34
+
+  ctx!.save()
+  ctx!.textAlign = 'left'
+  ctx!.fillStyle = COLORS.textDim
+  ctx!.font = '11px monospace'
+  ctx!.fillText('T O W E R   D A M A G E', x, y)
+  y += 22
+
+  for (const entry of entries) {
+    const resource = getResource(entry.resourceId)
+    const def = getTowerDefinition(entry.kind)
+
+    ctx!.fillStyle = resource.color
+    ctx!.beginPath()
+    ctx!.arc(x + 5, y - 4, 5, 0, Math.PI * 2)
+    ctx!.fill()
+
+    ctx!.textAlign = 'left'
+    ctx!.fillStyle = COLORS.textBright
+    ctx!.font = '12px monospace'
+    ctx!.fillText(`${entry.count}x ${resource.name} ${def.name}`, x + 16, y)
+
+    ctx!.textAlign = 'right'
+    ctx!.fillStyle = COLORS.textMid
+    ctx!.fillText(`${Math.round(entry.damage)} dmg`, x + LOADOUT_SUMMARY_WIDTH, y)
+
+    y += 19
+  }
   ctx!.restore()
 }
 
@@ -1439,8 +1523,8 @@ function combatTick(dt: number) {
 
   for (const enemy of enemies) tickEnemy(enemy, dt, elapsedSeconds, enemyPathLength)
 
-  updateTowers(towers, enemies, dt, elapsedSeconds, enemyPathPixels, towerCenter, hasAmmoAvailable, projectiles, visualEffects)
-  projectiles = updateProjectiles(projectiles, enemies, dt, elapsedSeconds, enemyPathPixels, visualEffects)
+  updateTowers(towers, enemies, dt, elapsedSeconds, enemyPathPixels, towerCenter, hasAmmoAvailable, projectiles, visualEffects, damageByLoadout)
+  projectiles = updateProjectiles(projectiles, enemies, dt, elapsedSeconds, enemyPathPixels, visualEffects, damageByLoadout)
   visualEffects = pruneVisualEffects(visualEffects, elapsedSeconds)
 
   const { remaining, killed, arrived } = pruneEnemies(enemies)
@@ -1467,6 +1551,7 @@ function render(_dt: number) {
   drawPaletteTooltips()
   drawWaveStatus()
   drawDefenseNetwork()
+  drawTowerLoadoutSummary()
   drawTowers()
   drawTowerCombatEffects(ctx!, towers, enemies, enemyPathPixels, towerCenter)
   drawTowerPlacementPreview()

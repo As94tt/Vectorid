@@ -163,10 +163,14 @@ export function speedFactor(enemy: Enemy, elapsedSeconds: number): number {
 }
 
 /** Wendet Schaden an — gemindert durch Rüstung, verstärkt durch Violets Vulnerability (gilt für
- * ALLE Schadensquellen, siehe ColorEffects.png: "Increases damage taken"). */
-export function dealDamage(enemy: Enemy, rawDamage: number) {
+ * ALLE Schadensquellen, siehe ColorEffects.png: "Increases damage taken"). Gibt den tatsächlich
+ * abgezogenen Schaden zurück (nach Rüstung/Vulnerability) — braucht z. B. combat.ts, um den
+ * Schaden je Turm-Konfiguration korrekt zu summieren (siehe dort `treatHit()`). */
+export function dealDamage(enemy: Enemy, rawDamage: number): number {
   const vulnerability = 1 + (enemy.violetStacks / VIOLET_STACK_MAX) * VIOLET_MAX_VULNERABILITY
-  enemy.hp -= rawDamage * (1 - enemy.armor) * vulnerability
+  const actualDamage = rawDamage * (1 - enemy.armor) * vulnerability
+  enemy.hp -= actualDamage
+  return actualDamage
 }
 
 /** Pro Frame: Bewegung (abzüglich Slow/Freeze) + Stack-Verfall (Blue/Red/Green je 1/Sekunde,

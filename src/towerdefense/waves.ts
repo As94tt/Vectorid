@@ -12,6 +12,8 @@ import { createEnemy, ENEMY_BASE_SIZE, type Enemy } from './enemies'
 export const ENEMIES_PER_WAVE = 20
 export const WAVE_SPAWN_INTERVAL = 0.5 // Sekunden zwischen 2 Spawns innerhalb einer Welle
 export const WAVE_PAUSE_SECONDS = 5
+/** Nach einer Boss-Welle (User-Vorgabe) länger Pause als sonst, damit man kurz durchatmen kann. */
+export const BOSS_WAVE_PAUSE_SECONDS = 10
 export const BOSS_WAVE_INTERVAL = 10
 export const RETRY_SETBACK_WAVES = 5
 
@@ -39,6 +41,15 @@ export function isBossWave(wave: number): boolean {
 
 function enemyCountForWave(wave: number): number {
   return isBossWave(wave) ? ENEMIES_PER_WAVE + 1 : ENEMIES_PER_WAVE
+}
+
+/** Für die HUD-Anzeige unter dem Wellenstand (siehe main.ts drawWaveStatus()): HP der normalen
+ * Gegner dieser Welle, plus HP des Bosses, falls es sich um eine Boss-Welle handelt (siehe
+ * isBossWave()) — dieselbe Formel wie `createRegularEnemyForWave()`/`createBossEnemyForWave()`,
+ * nur ohne tatsächlich einen Gegner zu erzeugen. */
+export function waveEnemyHp(wave: number): { regularHp: number; bossHp: number | null } {
+  const { hp } = statsForWave(wave)
+  return { regularHp: hp, bossHp: isBossWave(wave) ? hp * BOSS_HP_MULTIPLIER : null }
 }
 
 function statsForWave(wave: number): { hp: number; armor: number; baseSpeed: number } {
@@ -115,7 +126,7 @@ export function tickWaveSpawning(state: WaveState, dt: number, enemies: Enemy[])
 
       if (state.enemiesSpawnedInWave >= state.totalInWave) {
         state.phase = 'pause'
-        state.pauseTimer = WAVE_PAUSE_SECONDS
+        state.pauseTimer = isBossWave(state.currentWave) ? BOSS_WAVE_PAUSE_SECONDS : WAVE_PAUSE_SECONDS
       }
     }
     return
