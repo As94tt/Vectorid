@@ -185,9 +185,9 @@ function applyWhite(target: Enemy) {
 
 /**
  * Zentraler Dispatch: wendet den zur zugewiesenen Munition gehörenden Farb-Effekt an. Ohne
- * zugewiesene Munition (resourceId null) oder bei Ressourcen ohne eigenen Effekt (Lumen/Prisma —
- * die inzwischen ohnehin nicht mehr als Munition wählbar sind, siehe colorWheelPanel.ts
- * AMMO_RESOURCES) passiert nichts.
+ * zugewiesene Munition (resourceId null, kein Strahl aktuell angeschlossen — siehe main.ts
+ * economyTick()) oder bei Ressourcen ohne eigenen Effekt (Lumen/Prisma — die ohnehin nie als
+ * Strahl-Farbe vorkommen können, siehe data/resources.ts) passiert nichts.
  */
 export function applyAmmoEffect(resourceId: string | null, damage: number, target: Enemy, allEnemies: Enemy[], pathPixels: Point[], elapsedSeconds: number) {
   switch (resourceId) {

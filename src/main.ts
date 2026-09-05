@@ -2,9 +2,6 @@ import { COLORS } from './constants/colors'
 import { startGameLoop } from './core/gameLoop'
 import {
   BUILDING_COSTS,
-  CONTAINER_MAX_LEVEL,
-  containerUpgradeCost,
-  createContainer,
   createLightSource,
   createMirror,
   createPrism,
@@ -12,9 +9,7 @@ import {
   generatorUpgradeCost,
   rotateMirror,
   rotatePrism,
-  upgradeContainer,
   upgradeLightSource,
-  type Container,
   type LightSource,
   type Mirror,
   type Prism,
@@ -24,12 +19,9 @@ import {
   cellAtPoint,
   cellCenter,
   cellKey,
-  DEFENSE_STARTING_GRID_SIZE,
   drawPlacementGrid,
-  ECONOMY_STARTING_GRID_SIZE,
   gridPixelHeight,
   gridPixelWidth,
-  hexColumnWidth,
   GRID_EXPAND_COST,
   inBounds,
   nearestCell,
@@ -41,24 +33,20 @@ import { buildDefenseLookup, traceDefensePath, type Occupancy } from './grid/rou
 import { addToInventory, canAfford, cheatAddHundredToAll, createInventory, spend, type Inventory } from './economy/inventory'
 import {
   buildPalette,
-  containerRadius,
   drawBeamSegment,
   drawBeamTraveler,
   drawCellHighlight,
-  drawContainerEntity,
   drawLightSourceEntity,
   drawMaxLevelCellMarker,
   drawMirrorEntity,
   drawPaletteItem,
   drawPrismEntity,
   hitTestPalette,
-  isContainerMaxed,
   isSourceMaxed,
   paletteItemDescription,
   prismSize,
   sourceOuterRadius,
   sourceResourceIdForPalette,
-  CONTAINER_SIZE,
   PRISM_COMPLEX_SIZE,
   PRISM_SIMPLE_SIZE,
   SOURCE_OUTER_SIZE,
@@ -66,7 +54,6 @@ import {
   type PaletteKind,
 } from './render/buildingRender'
 import { buildHudButtons, drawHud, hitTestButton, HUD_HEIGHT, type HudButton } from './render/hud'
-import { buildWheelLayout, drawColorWheelPanel, hitTestWheelClose, hitTestWheelSwatch, type WheelSwatch } from './render/colorWheelPanel'
 import {
   buildTowerPalette,
   drawTowerEntity,
@@ -79,13 +66,13 @@ import {
 } from './render/towerRender'
 import { getEffectiveTowerStats, createTower, getTowerDefinition, loadoutKey, towerUpgradeCost, TOWER_DEFINITIONS, TOWER_MAX_LEVEL, type PlacedTower, type TowerKind } from './towerdefense/towers'
 import { getResource, RESOURCES } from './data/resources'
-import { drawCircleOutline, drawHexagon, drawLabel } from './render/shapes'
+import { drawHexagon, drawLabel } from './render/shapes'
 import { drawPath, pathTotalLength, type Point } from './towerdefense/path'
 import { updateProjectiles, updateTowers, pruneVisualEffects, type Projectile, type VisualEffect } from './towerdefense/combat'
 import { pruneEnemies, tickEnemy, type Enemy } from './towerdefense/enemies'
 import { createWaveState, isBossWave, registerLeak, tickWaveSpawning, waveEnemyHp, BOSS_LUMEN_MULTIPLIER, type WaveState } from './towerdefense/waves'
 import { drawEnemies, drawProjectiles, drawTowerCombatEffects, drawVisualEffects } from './render/combatRender'
-import { drawColorGuideList, drawTowerReferencePanel, drawWelcomePanel, hitTestReferencePanelClose } from './render/referencePanels'
+import { drawColorGuidePanel, drawTowerReferencePanel, drawWelcomePanel, hitTestReferencePanelClose } from './render/referencePanels'
 
 const canvas = document.getElementById('scene') as HTMLCanvasElement
 const ctx = canvas.getContext('2d')
@@ -93,12 +80,6 @@ if (!ctx) throw new Error('Canvas 2D context is not supported')
 
 let width = 0
 let height = 0
-let economyZoneWidth = 0
-/** Fest reservierter Streifen zwischen Economy- und Defense-Seite für den Farb-Guide (User-
- * Vorgabe: "als Feld zwischen economy und defense", nicht als blockierendes Popup) — die Breite
- * ist immer da, unabhängig davon, ob `colorGuideOpen` gerade Inhalt zeigt oder nur den Toggle. */
-const MIDDLE_STRIP_WIDTH = 230
-let defenseZoneX = 0
 
 // Info-Feld oben (Spielername/Level/Ressourcen/Einstellungen/Speichern/Cheat) + Bestand.
 const inventory: Inventory = createInventory()
@@ -107,21 +88,10 @@ const playerLevel = 1
 let hudButtons: HudButton[] = []
 let paletteItems: PaletteItem[] = []
 
-// Farbwheel-Panel (Overlay, blockiert währenddessen alle anderen Interaktionen): Munitions-
-// Auswahl für einen Turm (aus dem Anklicken eines platzierten, noch farblosen oder
-// umzufärbenden Turms, bzw. der "Ammo"-Zeile in dessen Info-Panel).
-let wheelMode: 'closed' | 'ammo' = 'closed'
-let ammoTargetTowerId: string | null = null
-let wheelSwatches: WheelSwatch[] = []
-let hoveredWheelResourceId: string | null = null
-
-// Nachschlage-Seite "Türme" auf der Defense-Seite (aus dem 'tower-info'-Icon der Kauf-Leiste
-// geöffnet): reine Anzeige, blockiert wie das Farbwheel alle anderen Interaktionen, solange offen.
+// Nachschlage-Seiten (blockierende Modals, siehe render/referencePanels.ts): "Türme" listet alle
+// Turmtypen, der Farb-Guide alle Farben (aus dem jeweiligen Icon der Kauf-Leiste geöffnet).
 let towersInfoOpen = false
-// Kombinierter Farb-Guide im festen Mittel-Feld zwischen Economy- und Defense-Seite (siehe
-// drawMiddleStrip()) — ersetzt die früheren getrennten "Colors"/"Effekte"-Bildseiten. Bewusst
-// NICHT blockierend: klappt nur den Inhalt des immer vorhandenen Streifens auf/zu.
-let colorGuideOpen = true
+let colorGuideOpen = false
 
 // Einmaliges Tutorial-Popup (User-Vorgabe: "beim ersten starten") — merkt sich per localStorage,
 // ob es schon gezeigt wurde, damit es bei künftigen Besuchen nicht erneut aufploppt (versucht
@@ -144,9 +114,9 @@ function markTutorialSeen() {
 let welcomeOpen = !hasSeenTutorial()
 
 // Info-Panel (Klick auf ein Gebäude/einen Turm): zeigt Name/Level/Produktionsdaten bzw.
-// Name/Munition/Level. Blockiert wie das Farbwheel alle anderen Interaktionen, solange offen.
+// Name/Munition/Level. Blockiert alle anderen Interaktionen, solange offen.
 interface InfoTarget {
-  kind: 'source' | 'container' | 'tower'
+  kind: 'source' | 'tower'
   id: string
 }
 interface InfoPanelRow {
@@ -154,9 +124,11 @@ interface InfoPanelRow {
   value: string
   y: number
   height: number
-  /** 'ammo' öffnet das Farbwheel im Munitions-Modus, 'level' versucht ein Level-Up (siehe
-   * attemptLevelUp() weiter unten) — beides über denselben klickbaren-Zeile-Mechanismus. */
-  action?: 'ammo' | 'level'
+  /** 'level' versucht ein Level-Up (siehe attemptLevelUp() weiter unten) — über denselben
+   * klickbaren-Zeile-Mechanismus wie überall sonst in diesem Panel. Türme haben kein 'ammo'-Row-
+   * Action mehr (User-Vorgabe: Munition kommt jetzt rein aus der Strahl-Verkabelung, siehe
+   * economyTick()) — die "Ammo"-Zeile ist nur noch Anzeige. */
+  action?: 'level'
 }
 interface InfoPanelLayout {
   x: number
@@ -170,26 +142,26 @@ let infoTarget: InfoTarget | null = null
 let infoPanelLayout: InfoPanelLayout | null = null
 
 // Abriss-Modus (User-Wunsch: Gebäude/Türme wieder löschen können, Lumen wird zurückerstattet).
-// Ein Toggle-Icon in jeder der beiden Kauf-Leisten schaltet denselben Modus ein/aus — solange
-// aktiv, löscht ein Klick auf ein Gebäude/einen Turm ihn sofort statt ihn auszuwählen/zu drehen.
+// Ein Toggle-Icon in der Kauf-Leiste schaltet den Modus ein/aus — solange aktiv, löscht ein Klick
+// auf ein Gebäude/einen Turm ihn sofort statt ihn auszuwählen/zu drehen.
 let demolishMode = false
 
 /** Klick vs. Halten+Ziehen auf Generator-Innenkreis/Producer-/Turm-Körper: erst nach dem
  * Loslassen entscheiden, ob es ein Klick (Info-Panel) oder ein Ziehen (Verschieben) war. */
 interface PendingPress {
-  kind: 'source' | 'mirror' | 'prism' | 'container' | 'tower' | 'defense-mirror' | 'spawn'
+  kind: 'source' | 'mirror' | 'prism' | 'tower' | 'spawn'
   id: string
   downPos: Point
 }
 let pendingPress: PendingPress | null = null
 const PRESS_MOVE_THRESHOLD = 6
 
-// Türme (Defense-Seite): Kauf-Leiste oben, analog zur Economy-Seite. Türme stehen NUR auf
-// Knotenpunkten des Defense-Rasters (siehe defenseGrid weiter unten), nicht frei im Feld.
+// Türme: eigener Abschnitt der kombinierten Kauf-Leiste (siehe buildScene()). Stehen wie jedes
+// andere Gebäude auf dem gemeinsamen Raster (siehe placementGrid weiter unten).
 let towers: PlacedTower[] = []
 let towerPaletteItems: TowerPaletteItem[] = []
 let towerCounter = 0
-let placingTowerKind: TowerKind | 'mirror' | null = null
+let placingTowerKind: TowerKind | null = null
 let placingTowerCursor: Point | null = null
 
 function nextTowerId(): string {
@@ -197,166 +169,126 @@ function nextTowerId(): string {
   return `tower-${towerCounter}`
 }
 
-function buildScene() {
-  economyZoneWidth = (width - MIDDLE_STRIP_WIDTH) * 0.4
-  defenseZoneX = economyZoneWidth + MIDDLE_STRIP_WIDTH
+/** Eine einzige kombinierte Kauf-Leiste (User-Vorgabe: "alles auf einem Grid" statt getrennter
+ * Economy-/Defense-Reihen) — `buildPalette()` liefert die ersten Einträge (Lichtquellen/Spiegel/
+ * Prismen), `buildTowerPalette()` reiht direkt danach die Turmtypen + Grid-Erweiterung/Info-Icons
+ * an (`startX` verschoben um genau `paletteItems.length` Positionen). */
+const PALETTE_GAP = 64
 
+function buildScene() {
   hudButtons = buildHudButtons(width)
-  paletteItems = buildPalette(56, HUD_HEIGHT + 62, 76)
-  towerPaletteItems = buildTowerPalette(defenseZoneX + 56, HUD_HEIGHT + 62, 68)
-  wheelSwatches = buildWheelLayout(width, height)
+  paletteItems = buildPalette(56, HUD_HEIGHT + 62, PALETTE_GAP)
+  towerPaletteItems = buildTowerPalette(56 + paletteItems.length * PALETTE_GAP, HUD_HEIGHT + 62, PALETTE_GAP)
 }
 
-// Licht-Wirtschaft: eigenes Raster, auf dem Lichtquellen/Spiegel/Prismen/Container platziert
-// werden (siehe economy/buildings.ts + lightSimulation.ts). Wird nur einmal aufgebaut (nicht
-// bei jedem Resize neu), damit vom User platzierte Bauwerke erhalten bleiben.
+// Das gemeinsame Raster (User-Vorgabe: "Instead of having the split between economy and defense,
+// i want to have everything on one grid") — Lichtquellen/Spiegel/Prismen/Türme UND der Gegner-
+// Spawn/-Pfad leben alle hier zusammen, teilen sich EINE Belegungs-Map. Ein Strahl muss jetzt in
+// einem Turm ENDEN, um dessen Farbe als Munition zu liefern (siehe economy/lightSimulation.ts,
+// economyTick() weiter unten) — kein Container-Bautyp mehr. Jedes Nicht-Spiegel-Gebäude blockiert
+// den Gegner-Pfad genau wie früher nur ein Turm (siehe recomputeEnemyPath()); Spiegel lenken
+// sowohl Licht ALS AUCH den Gegner-Pfad um (dieselben Objekte, siehe grid/routing.ts).
 let placementGrid: PlacementGrid
 let lightSources: LightSource[] = []
 let mirrors: Mirror[] = []
 let prisms: Prism[] = []
-let containers: Container[] = []
 let occupancy: Occupancy = new Map()
-let buildingsReady = false
-let lightSimulation: SimulationResult = { segments: [], prismStatus: new Map(), containerRates: new Map(), totalRates: new Map(), activeSourceIds: new Set() }
+let worldReady = false
+let lightSimulation: SimulationResult = { segments: [], prismStatus: new Map(), towerAmmo: new Map(), activeSourceIds: new Set() }
+
+let spawnNode: GridCoord
+let spawnDirection: HexDirection = 0
+let enemyPathPixels: Point[] = []
+/** Gesamtlänge des aktuellen Pfads in Pixeln — cached, damit tickEnemy() nicht jeden Frame für
+ * jeden Gegner neu über den ganzen Pfad summieren muss (siehe recomputeEnemyPath()). */
+let enemyPathLength = 0
+/** Id des Gebäudes, an dem der aktuelle Gegner-Pfad endet — `null`, wenn er stattdessen am
+ * Rasterrand endet (noch kein Hindernis im Weg). Nur für die "Wand"-Marker-Entscheidung in
+ * drawPath() gebraucht (siehe grid/routing.ts DefensePathResult). */
+let pathHitBlockerId: string | null = null
 
 function rebuildOccupancy() {
   occupancy = new Map()
-  for (const b of [...lightSources, ...mirrors, ...prisms, ...containers]) occupancy.set(cellKey({ col: b.col, row: b.row }), b.id)
+  occupancy.set(cellKey(spawnNode), 'spawn')
+  for (const b of [...lightSources, ...mirrors, ...prisms, ...towers]) occupancy.set(cellKey({ col: b.col, row: b.row }), b.id)
 }
 
 function recomputeLightSimulation() {
-  lightSimulation = simulateLight(placementGrid, lightSources, mirrors, prisms, containers)
+  lightSimulation = simulateLight(placementGrid, lightSources, mirrors, prisms, towers)
 }
 
-function buildDemoEconomy() {
-  const cellSize = 30
-  // Oben-rechts verankert: rechte Kante und obere Kante liegen fest, das Raster wächst beim
-  // Erweitern nach links (mehr Spalten) und unten (mehr Zeilen) — siehe expandGrid(). originX
-  // wird über die tatsächliche Pixel-Breite des Hex-Rasters bestimmt (nicht mehr `cols*cellSize`
-  // wie beim quadratischen Raster, siehe gridPixelWidth()).
-  const topMargin = HUD_HEIGHT + 126 // Platz für "ECONOMY"-Label + Kauf-Leiste
-  const rightMargin = 40
-  const rightEdge = economyZoneWidth - rightMargin
-  placementGrid = {
-    cols: ECONOMY_STARTING_GRID_SIZE,
-    rows: ECONOMY_STARTING_GRID_SIZE,
-    cellSize,
-    originX: 0,
-    originY: topMargin,
-  }
-  placementGrid.originX = rightEdge - gridPixelWidth(placementGrid)
-
-  // User-Vorgabe: zum Start nur ein Cyan-Generator + ein Container (direkt nördlich angrenzend,
-  // zeigt das Grundprinzip sofort vor) — alles Weitere (Magenta/Yellow, Spiegel, Prismen) baut
-  // der Spieler sich selbst.
-  lightSources = [createLightSource(0, 3, 'cyan')]
-  mirrors = []
-  prisms = []
-  containers = [createContainer(0, 2)]
-  rebuildOccupancy()
-  buildingsReady = true
-  recomputeLightSimulation()
+/** Gegner-Pfad: strahlt ab `spawnNode` los, Spiegel lenken um, JEDES andere Gebäude (Lichtquelle/
+ * Prisma/Turm — User-Vorgabe: "jedes gebäude blockiert den Weg wie ein Turm") beendet den Pfad
+ * dort, wie zuvor nur ein Turm. Muss nach JEDER Änderung an Spiegeln/Lichtquellen/Prismen/Türmen
+ * neu aufgerufen werden (nicht nur bei Turm-/Spiegel-Änderungen wie vor der Zusammenlegung). */
+function recomputeEnemyPath() {
+  const blockers = [...lightSources, ...prisms, ...towers].map((b) => ({ id: b.id, col: b.col, row: b.row }))
+  const lookup = buildDefenseLookup(mirrors, blockers)
+  const maxSteps = (placementGrid.cols + placementGrid.rows) * 4 // Sicherheitsbremse gg. Spiegel-Endlosschleife
+  const { cells, hitBlockerId } = traceDefensePath(placementGrid, lookup, spawnNode, spawnDirection, maxSteps)
+  enemyPathPixels = cells.map((c) => cellCenter(placementGrid, c))
+  enemyPathLength = pathTotalLength(enemyPathPixels)
+  pathHitBlockerId = hitBlockerId
 }
 
 function buildingCenter(b: { col: number; row: number }) {
   return cellCenter(placementGrid, { col: b.col, row: b.row })
 }
 
-// Defense-Knotenraster: Türme UND Spiegel stehen ausschließlich auf Knotenpunkten dieses
-// Rasters, der Spawn ebenso. Der Gegner-Pfad ist seit dieser Runde KEIN kürzester BFS-Weg zu
-// einem separat platzierten Ziel mehr (User-Vorgabe: "ich möchte nicht, dass der kürzeste Weg
-// genommen wird") — stattdessen strahlt der Spawn wie ein Prisma auf der Economy-Seite EINEN
-// Strahl in eine dedizierte, per Klick drehbare Richtung ab, Spiegel (identisches Datenmodell
-// wie economy/buildings.ts) lenken ihn um, er läuft unbegrenzt weiter, bis er einen Turm trifft
-// (das ist dann das Ziel) oder den Rasterrand verlässt ("Wand") — siehe grid/routing.ts
-// `traceDefensePath()`. Jede Turm-/Spiegel-Platzierung/-Verschiebung UND jede Spawn-Drehung/
-// -Verschiebung löst ein Neu-Berechnen aus.
-let defenseGrid: PlacementGrid
-let defenseOccupancy: Occupancy = new Map()
-let spawnNode: GridCoord
-let spawnDirection: HexDirection = 0
-let defenseMirrors: Mirror[] = []
-let enemyPathPixels: Point[] = []
-/** Gesamtlänge des aktuellen Pfads in Pixeln — cached, damit tickEnemy() nicht jeden Frame für
- * jeden Gegner neu über den ganzen Pfad summieren muss (siehe recomputeEnemyPath()). */
-let enemyPathLength = 0
-/** Id des Turms, an dem der aktuelle Gegner-Pfad endet — `null`, wenn er stattdessen am
- * Rasterrand endet (noch kein Turm im Weg). */
-let pathTargetTowerId: string | null = null
-let defenseReady = false
-
-function rebuildDefenseOccupancy() {
-  defenseOccupancy = new Map()
-  defenseOccupancy.set(cellKey(spawnNode), 'spawn')
-  for (const mirror of defenseMirrors) defenseOccupancy.set(cellKey(mirror), mirror.id)
-  for (const tower of towers) defenseOccupancy.set(cellKey({ col: tower.col, row: tower.row }), tower.id)
-}
-
-function recomputeEnemyPath() {
-  const lookup = buildDefenseLookup(defenseMirrors, towers)
-  const maxSteps = (defenseGrid.cols + defenseGrid.rows) * 4 // Sicherheitsbremse gg. Spiegel-Endlosschleife
-  const { cells, hitTowerId } = traceDefensePath(defenseGrid, lookup, spawnNode, spawnDirection, maxSteps)
-  enemyPathPixels = cells.map((c) => cellCenter(defenseGrid, c))
-  enemyPathLength = pathTotalLength(enemyPathPixels)
-  pathTargetTowerId = hitTowerId
-}
-
-function canPlaceTowerAt(cell: GridCoord, ignoreId?: string): boolean {
-  if (!inBounds(defenseGrid, cell)) return false
-  const occupant = defenseOccupancy.get(cellKey(cell))
-  return !occupant || occupant === ignoreId
-}
-
-function canPlaceDefenseMirrorAt(cell: GridCoord, ignoreId?: string): boolean {
-  if (!inBounds(defenseGrid, cell)) return false
-  const occupant = defenseOccupancy.get(cellKey(cell))
-  return !occupant || occupant === ignoreId
+/** Gültige Zelle fürs Platzieren/Verschieben irgendeines Gebäudes/Spiegels/Turms — frei ODER vom
+ * gezogenen Gebäude selbst (`ignoreId`) belegt. Ein Tausch (siehe finalizeMove()) entscheidet sich
+ * NICHT hier, sondern beim Aufrufer (dieser Check lässt jede belegte Zelle als "gültiges Ziel"
+ * durch, `ignoreId` betrifft nur das Sonderfall "eigene alte Zelle"). */
+function canPlaceAt(cell: GridCoord): boolean {
+  return inBounds(placementGrid, cell)
 }
 
 function canMoveSpawnTo(cell: GridCoord): boolean {
-  if (!inBounds(defenseGrid, cell)) return false
-  const occupant = defenseOccupancy.get(cellKey(cell))
+  if (!inBounds(placementGrid, cell)) return false
+  const occupant = occupancy.get(cellKey(cell))
   return !occupant || occupant === 'spawn'
 }
 
-function buildDefenseNetwork() {
-  const cellSize = 35
-  defenseGrid = {
-    cols: DEFENSE_STARTING_GRID_SIZE,
-    rows: DEFENSE_STARTING_GRID_SIZE,
-    cellSize,
-    originX: defenseZoneX + 48,
-    originY: HUD_HEIGHT + 126,
-  }
+function buildWorld() {
+  const cellSize = 34
+  placementGrid = { cols: 7, rows: 7, cellSize, originX: 0, originY: HUD_HEIGHT + 126 }
+  placementGrid.originX = (width - gridPixelWidth(placementGrid)) / 2
+
   spawnNode = { col: 0, row: 0 } // User-Vorgabe: Standard-Startpunkt ist das Feld oben links
   spawnDirection = 0 // zeigt zu Beginn ins Rasterinnere (Spawn sitzt oben-links)
-  defenseMirrors = []
+
+  // User-Vorgabe: kein Container mehr zum Vorführen des Grundprinzips da — nur EIN Cyan-Generator,
+  // der Spieler verkabelt sich seinen ersten Turm selbst.
+  lightSources = [createLightSource(0, 3, 'cyan')]
+  mirrors = []
+  prisms = []
   towers = []
   enemies = []
   waveState = createWaveState()
-  rebuildDefenseOccupancy()
+
+  rebuildOccupancy()
+  worldReady = true
+  recomputeLightSimulation()
   recomputeEnemyPath()
-  defenseReady = true
 }
 
-/** Erweitert das Defense-Raster um 1 Spalte + 1 Zeile. Oben-links bleibt fix verankert —
- * Ursprung ändert sich nicht, bestehende Knoten-Koordinaten bleiben gültig (kein Renumbering
- * nötig, anders als beim Economy-Raster, das nach links statt nach rechts wächst). */
-function expandDefenseGrid() {
+/** Erweitert das gemeinsame Raster um 1 Spalte + 1 Zeile — oben-links bleibt fix verankert (Spawn-
+ * Ecke), neue Spalten/Zeilen kommen rechts/unten dazu, keine bestehende Gebäude-Koordinate ändert
+ * sich (anders als beim früheren, nach links wachsenden Economy-Raster). */
+function expandGrid() {
   if (!canAfford(inventory, 'prisma', GRID_EXPAND_COST)) return
   spend(inventory, 'prisma', GRID_EXPAND_COST)
-  defenseGrid = { ...defenseGrid, cols: defenseGrid.cols + 1, rows: defenseGrid.rows + 1 }
+  placementGrid = { ...placementGrid, cols: placementGrid.cols + 1, rows: placementGrid.rows + 1 }
   // Der Pfad kann bisher an der jetzt verschobenen Wand geendet haben — mit mehr Platz läuft er
-  // ggf. weiter, bis er einen Turm trifft oder die NEUE (weiter entfernte) Wand erreicht.
+  // ggf. weiter, bis er ein Hindernis trifft oder die NEUE (weiter entfernte) Wand erreicht.
   recomputeEnemyPath()
 }
 
-// Kampf-Simulation (Defense-Seite): Gegner spawnen wellenweise (siehe towerdefense/waves.ts —
-// 20 Gegner/Welle, 5s Pause danach, jede Welle stärker, Boss alle 10 Wellen, Fehlschlag setzt
-// 5 Wellen zurück), Türme feuern automatisch auf Gegner in Reichweite (siehe towerdefense/
-// combat.ts). Munition liefert dabei nur noch C/M/Y (siehe towerdefense/ammoEffects.ts) —
-// Statuseffekte entstehen aus dem angesammelten Mischungsverhältnis der Gegner selbst (siehe
-// towerdefense/enemies.ts).
+// Kampf-Simulation: Gegner spawnen wellenweise (siehe towerdefense/waves.ts — 20 Gegner/Welle, 5s
+// Pause danach (10s nach einer Boss-Welle), jede Welle stärker, Boss alle 10 Wellen, Fehlschlag
+// setzt 5 Wellen zurück), Türme feuern automatisch auf Gegner in Reichweite (siehe towerdefense/
+// combat.ts). Munition kommt direkt aus der Licht-Simulation (siehe economyTick()) — kein
+// globaler Ratenpool, keine manuelle Auswahl mehr.
 let enemies: Enemy[] = []
 let projectiles: Projectile[] = []
 let visualEffects: VisualEffect[] = []
@@ -376,18 +308,18 @@ function resize() {
   canvas.height = height * dpr
   ctx!.setTransform(dpr, 0, 0, dpr, 0, 0)
   buildScene()
-  if (!buildingsReady) buildDemoEconomy()
-  if (!defenseReady) buildDefenseNetwork()
+  if (!worldReady) buildWorld()
 }
 
 window.addEventListener('resize', resize)
 resize()
 
 // --- Interaktion ---
-// Lichtquelle/Prisma/Container halten+ziehen = verschieben, kurz antippen = Info-Panel.
-// Spiegel antippen dreht ihn sofort (kein Info-Panel dafür, siehe User-Vorgabe) — halten+ziehen
-// verschiebt ihn trotzdem. Kauf-Leiste anfassen = neues Gebäude ziehen und aufs Raster fallen
-// lassen (kostet Lumen) bzw. Raster erweitern (kostet Prisma, sofortige Aktion statt Drag).
+// Lichtquelle/Prisma/Turm halten+ziehen = verschieben, kurz antippen = Info-Panel. Spiegel
+// antippen dreht ihn sofort (kein Info-Panel dafür, siehe User-Vorgabe) — halten+ziehen verschiebt
+// ihn trotzdem, genau wie den Spawn (der stattdessen seine Abstrahlrichtung dreht). Kauf-Leiste
+// anfassen = neues Gebäude ziehen und aufs Raster fallen lassen (kostet Lumen) bzw. Raster
+// erweitern (kostet Prisma, sofortige Aktion statt Drag).
 
 function pointerPos(e: PointerEvent): Point {
   const rect = canvas.getBoundingClientRect()
@@ -395,7 +327,7 @@ function pointerPos(e: PointerEvent): Point {
 }
 
 interface EconomyHit {
-  kind: 'source' | 'mirror' | 'prism' | 'container'
+  kind: 'source' | 'mirror' | 'prism'
   id: string
 }
 
@@ -409,14 +341,11 @@ function hitTestEconomyBuilding(x: number, y: number): EconomyHit | null {
   for (const prism of prisms) {
     if (Math.hypot(buildingCenter(prism).x - x, buildingCenter(prism).y - y) <= prismSize(prism) + 6) return { kind: 'prism', id: prism.id }
   }
-  for (const container of containers) {
-    if (Math.hypot(buildingCenter(container).x - x, buildingCenter(container).y - y) <= containerRadius(container) + 6) return { kind: 'container', id: container.id }
-  }
   return null
 }
 
 function towerCenter(tower: PlacedTower) {
-  return cellCenter(defenseGrid, { col: tower.col, row: tower.row })
+  return cellCenter(placementGrid, { col: tower.col, row: tower.row })
 }
 
 function hitTestTower(x: number, y: number): PlacedTower | null {
@@ -426,19 +355,13 @@ function hitTestTower(x: number, y: number): PlacedTower | null {
 /** Spawn-Hexagon anfassen — Klick dreht seine Abstrahlrichtung (wie ein Prisma), Halten+Ziehen
  * verschiebt ihn (siehe pendingPress-Logik unten). */
 function hitTestSpawn(x: number, y: number): boolean {
-  const spawnCenter = cellCenter(defenseGrid, spawnNode)
+  const spawnCenter = cellCenter(placementGrid, spawnNode)
   return Math.hypot(spawnCenter.x - x, spawnCenter.y - y) <= 20
 }
 
-function defenseMirrorCenter(mirror: Mirror) {
-  return cellCenter(defenseGrid, { col: mirror.col, row: mirror.row })
-}
-
-function hitTestDefenseMirror(x: number, y: number): Mirror | null {
-  return defenseMirrors.find((m) => Math.hypot(defenseMirrorCenter(m).x - x, defenseMirrorCenter(m).y - y) <= defenseGrid.cellSize * 0.45) ?? null
-}
-
-/** Löscht ein Economy-Gebäude und erstattet seinen Lumen-Baukosten zurück (User-Wunsch). */
+/** Löscht ein Gebäude (Lichtquelle/Spiegel/Prisma) und erstattet seinen Lumen-Baukosten zurück
+ * (User-Wunsch) — jedes davon kann den Gegner-Pfad blockiert haben, daher immer beide Neu-
+ * Berechnungen (Belegung + Pfad) danach. */
 function demolishEconomyBuilding(hit: EconomyHit) {
   if (hit.kind === 'source') {
     lightSources = lightSources.filter((s) => s.id !== hit.id)
@@ -446,25 +369,21 @@ function demolishEconomyBuilding(hit: EconomyHit) {
   } else if (hit.kind === 'mirror') {
     mirrors = mirrors.filter((m) => m.id !== hit.id)
     addToInventory(inventory, 'lumen', BUILDING_COSTS.mirror)
-  } else if (hit.kind === 'prism') {
+  } else {
     const prism = prisms.find((p) => p.id === hit.id)
     prisms = prisms.filter((p) => p.id !== hit.id)
     if (prism) addToInventory(inventory, 'lumen', prism.prismKind === 'triangle' ? BUILDING_COSTS.prismSimple : BUILDING_COSTS.prismComplex)
-  } else {
-    containers = containers.filter((c) => c.id !== hit.id)
-    addToInventory(inventory, 'lumen', BUILDING_COSTS.container)
   }
   rebuildOccupancy()
+  recomputeEnemyPath()
   if (infoTarget && infoTarget.id === hit.id) infoTarget = null
 }
 
 /** Levelt das Gebäude/den Turm hinter `target` um 1 hoch, sofern noch nicht maximal und die
- * Lumen-Kosten (siehe economy/buildings.ts generatorUpgradeCost()/containerUpgradeCost()/
- * towerdefense/towers.ts towerUpgradeCost()) bezahlt werden können — ausgelöst durch Klick auf
- * die "Level"-Zeile im Info-Panel (siehe pointerdown). Prismen haben kein Level (User-Vorgabe,
- * entfernt) und daher auch kein Info-Panel — Klick dreht sie stattdessen (siehe pendingPress-
- * Logik), ihre Ausgabe-Stärke ergibt sich live aus den ankommenden Strahlen (siehe
- * lightSimulation.ts). */
+ * Lumen-Kosten (siehe economy/buildings.ts generatorUpgradeCost()/towerdefense/towers.ts
+ * towerUpgradeCost()) bezahlt werden können — ausgelöst durch Klick auf die "Level"-Zeile im
+ * Info-Panel (siehe pointerdown). Prismen/Spiegel haben kein Level und daher auch kein Info-Panel
+ * — Klick dreht sie stattdessen (siehe pendingPress-Logik). */
 function attemptLevelUp(target: InfoTarget) {
   if (target.kind === 'source') {
     const source = lightSources.find((s) => s.id === target.id)
@@ -473,13 +392,6 @@ function attemptLevelUp(target: InfoTarget) {
     if (!canAfford(inventory, 'lumen', cost)) return
     spend(inventory, 'lumen', cost)
     upgradeLightSource(source)
-  } else if (target.kind === 'container') {
-    const container = containers.find((c) => c.id === target.id)
-    if (!container || container.level >= CONTAINER_MAX_LEVEL) return
-    const cost = containerUpgradeCost(container.level + 1)
-    if (!canAfford(inventory, 'lumen', cost)) return
-    spend(inventory, 'lumen', cost)
-    upgradeContainer(container)
   } else {
     const tower = towers.find((t) => t.id === target.id)
     if (!tower || tower.level >= TOWER_MAX_LEVEL) return
@@ -490,23 +402,13 @@ function attemptLevelUp(target: InfoTarget) {
   }
 }
 
-
 /** Löscht einen Turm und erstattet seinen Lumen-Baukosten zurück (User-Wunsch). */
 function demolishTower(tower: PlacedTower) {
   towers = towers.filter((t) => t.id !== tower.id)
   addToInventory(inventory, 'lumen', getTowerDefinition(tower.kind).cost)
-  rebuildDefenseOccupancy()
+  rebuildOccupancy()
   recomputeEnemyPath()
   if (infoTarget && infoTarget.id === tower.id) infoTarget = null
-}
-
-/** Löscht einen Defense-Spiegel und erstattet seinen Lumen-Baukosten zurück (derselbe Bautyp/
- * Baukosten wie ein Economy-Spiegel). */
-function demolishDefenseMirror(mirror: Mirror) {
-  defenseMirrors = defenseMirrors.filter((m) => m.id !== mirror.id)
-  addToInventory(inventory, 'lumen', BUILDING_COSTS.mirror)
-  rebuildDefenseOccupancy()
-  recomputeEnemyPath()
 }
 
 let placingNewKind: PaletteKind | null = null
@@ -514,38 +416,13 @@ let placingCursor: Point | null = null
 let hoveredEconomyItem: PaletteItem | null = null
 let hoveredTowerItem: TowerPaletteItem | null = null
 let movingBuildingId: string | null = null
-let movingKind: 'source' | 'mirror' | 'prism' | 'container' | 'tower' | 'defense-mirror' | 'spawn' | null = null
+let movingKind: 'source' | 'mirror' | 'prism' | 'tower' | 'spawn' | null = null
 let movingCursor: Point | null = null
 
 function handleHudButton(id: HudButton['id']) {
   if (id === 'cheat') cheatAddHundredToAll(inventory)
   else if (id === 'demolish') demolishMode = !demolishMode
   // 'settings' und 'save': absichtlich ohne Funktion (User-Wunsch — noch keine Logik dahinter).
-}
-
-/**
- * Erweitert das Raster um 1 Spalte + 1 Zeile. Oben-rechts bleibt fix verankert: neue Zeilen
- * kommen unten dazu (kein Anpassungsbedarf), neue Spalten kommen links dazu — dafür wird der
- * Ursprung um eine Zellbreite nach links verschoben UND jede bestehende col-Koordinate
- * (Gebäude + Verbindungspfade) um 1 erhöht, damit sich an den Pixel-Positionen nichts ändert.
- */
-function expandGrid() {
-  if (!canAfford(inventory, 'prisma', GRID_EXPAND_COST)) return
-  spend(inventory, 'prisma', GRID_EXPAND_COST)
-
-  const columnWidth = hexColumnWidth(placementGrid)
-  placementGrid = {
-    ...placementGrid,
-    cols: placementGrid.cols + 1,
-    rows: placementGrid.rows + 1,
-    originX: placementGrid.originX - columnWidth,
-  }
-
-  for (const source of lightSources) source.col += 1
-  for (const mirror of mirrors) mirror.col += 1
-  for (const prism of prisms) prism.col += 1
-  for (const container of containers) container.col += 1
-  rebuildOccupancy()
 }
 
 canvas.addEventListener('pointerdown', (e) => {
@@ -560,26 +437,7 @@ canvas.addEventListener('pointerdown', (e) => {
     return
   }
 
-  // Farbwheel-Panel (Munitions-Auswahl) blockiert alle anderen Interaktionen, solange offen.
-  if (wheelMode !== 'closed') {
-    if (hitTestWheelClose(width, height, pos.x, pos.y)) {
-      wheelMode = 'closed'
-      ammoTargetTowerId = null
-      return
-    }
-    if (ammoTargetTowerId) {
-      const swatch = hitTestWheelSwatch(wheelSwatches, pos.x, pos.y)
-      const tower = towers.find((t) => t.id === ammoTargetTowerId)
-      if (swatch && tower && !unavailableAmmoIds(ammoTargetTowerId).has(swatch.resource.id)) {
-        tower.resourceId = swatch.resource.id
-        wheelMode = 'closed'
-        ammoTargetTowerId = null
-      }
-    }
-    return
-  }
-
-  // Info-Panel blockiert ebenso alle anderen Interaktionen, solange es offen ist.
+  // Info-Panel blockiert alle anderen Interaktionen, solange es offen ist.
   if (infoTarget) {
     const layout = infoPanelLayout
     if (!layout) {
@@ -593,12 +451,6 @@ canvas.addEventListener('pointerdown', (e) => {
       return
     }
     const clickedRow = rows.find((r) => r.action && pos.x >= x && pos.x <= x + w && pos.y >= r.y && pos.y <= r.y + r.height)
-    if (clickedRow?.action === 'ammo' && infoTarget.kind === 'tower') {
-      ammoTargetTowerId = infoTarget.id
-      wheelMode = 'ammo'
-      infoTarget = null
-      return
-    }
     if (clickedRow?.action === 'level') {
       attemptLevelUp(infoTarget)
       return
@@ -608,17 +460,14 @@ canvas.addEventListener('pointerdown', (e) => {
     return
   }
 
-  // Türme-Infoseite blockiert ebenso alle anderen Interaktionen, solange offen — reine Anzeige,
-  // einziger Klick-Handler ist das Schließen. Der Farb-Guide dagegen ist NICHT blockierend (siehe
-  // drawMiddleStrip()) — er lebt in seinem eigenen, fest reservierten Feld und lässt beide
-  // Spielseiten währenddessen normal bedienbar, daher hier absichtlich kein eigener Guard.
+  // Türme-Infoseite / Farb-Guide blockieren ebenso alle anderen Interaktionen, solange offen —
+  // reine Anzeige, einziger Klick-Handler ist das Schließen.
   if (towersInfoOpen) {
     if (hitTestReferencePanelClose(width, height, pos.x, pos.y)) towersInfoOpen = false
     return
   }
-
-  if (hitTestHelpToggle(pos.x, pos.y)) {
-    colorGuideOpen = !colorGuideOpen
+  if (colorGuideOpen) {
+    if (hitTestReferencePanelClose(width, height, pos.x, pos.y)) colorGuideOpen = false
     return
   }
 
@@ -630,18 +479,16 @@ canvas.addEventListener('pointerdown', (e) => {
 
   const paletteItem = hitTestPalette(paletteItems, pos.x, pos.y)
   if (paletteItem) {
-    if (paletteItem.kind === 'expand-grid') expandGrid()
-    else {
-      placingNewKind = paletteItem.kind
-      placingCursor = pos
-    }
+    placingNewKind = paletteItem.kind
+    placingCursor = pos
     return
   }
 
   const towerPaletteItem = hitTestTowerPalette(towerPaletteItems, pos.x, pos.y)
   if (towerPaletteItem) {
-    if (towerPaletteItem.kind === 'expand-grid') expandDefenseGrid()
+    if (towerPaletteItem.kind === 'expand-grid') expandGrid()
     else if (towerPaletteItem.kind === 'tower-info') towersInfoOpen = true
+    else if (towerPaletteItem.kind === 'color-guide') colorGuideOpen = true
     else {
       placingTowerKind = towerPaletteItem.kind
       placingTowerCursor = pos
@@ -659,18 +506,8 @@ canvas.addEventListener('pointerdown', (e) => {
     return
   }
 
-  const defenseMirrorHit = hitTestDefenseMirror(pos.x, pos.y)
-  if (defenseMirrorHit) {
-    if (demolishMode) {
-      demolishDefenseMirror(defenseMirrorHit)
-      return
-    }
-    pendingPress = { kind: 'defense-mirror', id: defenseMirrorHit.id, downPos: pos }
-    return
-  }
-
   if (hitTestSpawn(pos.x, pos.y)) {
-    // Kein Abriss für den Spawn — er ist Pflichtbestandteil des Defense-Rasters (immer genau 1).
+    // Kein Abriss für den Spawn — er ist Pflichtbestandteil des Rasters (immer genau 1).
     pendingPress = { kind: 'spawn', id: 'spawn', downPos: pos }
     return
   }
@@ -688,16 +525,12 @@ canvas.addEventListener('pointerdown', (e) => {
 canvas.addEventListener('pointermove', (e) => {
   const pos = pointerPos(e)
   if (welcomeOpen) return
-  if (wheelMode !== 'closed') {
-    hoveredWheelResourceId = hitTestWheelSwatch(wheelSwatches, pos.x, pos.y)?.resource.id ?? null
-    return
-  }
   if (infoTarget) return
   if (towersInfoOpen) return
+  if (colorGuideOpen) return
 
   hoveredEconomyItem = hitTestPalette(paletteItems, pos.x, pos.y)
   hoveredTowerItem = hitTestTowerPalette(towerPaletteItems, pos.x, pos.y)
-  helpToggleHovered = hitTestHelpToggle(pos.x, pos.y)
 
   if (pendingPress) {
     const dist = Math.hypot(pos.x - pendingPress.downPos.x, pos.y - pendingPress.downPos.y)
@@ -730,10 +563,6 @@ function finalizePlacement(pos: Point) {
     if (!canAfford(inventory, 'lumen', cost)) return
     spend(inventory, 'lumen', cost)
     prisms.push(createPrism(cell.col, cell.row, kind === 'prism-simple' ? 'triangle' : 'hexagon'))
-  } else if (kind === 'container') {
-    if (!canAfford(inventory, 'lumen', BUILDING_COSTS.container)) return
-    spend(inventory, 'lumen', BUILDING_COSTS.container)
-    containers.push(createContainer(cell.col, cell.row))
   } else {
     const resourceId = sourceResourceIdForPalette(kind)
     if (!resourceId) return
@@ -742,17 +571,19 @@ function finalizePlacement(pos: Point) {
     lightSources.push(createLightSource(cell.col, cell.row, resourceId))
   }
   rebuildOccupancy()
+  recomputeEnemyPath()
 }
 
-/** Irgendein Economy-Gebäude (unabhängig vom Typ) anhand seiner Id finden — fürs generische
- * Verschieben/Tauschen, das nicht wissen muss, in welchem der 4 Arrays es steckt. */
+/** Irgendein Lichtquelle/Spiegel/Prisma (unabhängig vom Typ) anhand seiner Id finden — fürs
+ * generische Verschieben/Tauschen, das nicht wissen muss, in welchem der 3 Arrays es steckt. */
 function findEconomyBuilding(id: string): { col: number; row: number } | null {
-  return lightSources.find((s) => s.id === id) ?? mirrors.find((m) => m.id === id) ?? prisms.find((p) => p.id === id) ?? containers.find((c) => c.id === id) ?? null
+  return lightSources.find((s) => s.id === id) ?? mirrors.find((m) => m.id === id) ?? prisms.find((p) => p.id === id) ?? null
 }
 
-/** Kein explizites Neu-Routen nötig — die Licht-Simulation wird jeden Frame komplett neu aus
+/** Kein explizites Neu-Routen der Licht-Simulation nötig — die wird jeden Frame komplett neu aus
  * den aktuellen Positionen berechnet (siehe recomputeLightSimulation()), verschobene Bauwerke
- * wirken sich also automatisch auf den nächsten Frame aus.
+ * wirken sich also automatisch auf den nächsten Frame aus. Der Gegner-Pfad dagegen wird NUR bei
+ * Bedarf neu verfolgt (siehe recomputeEnemyPath()) — jedes dieser 3 Gebäude kann ihn blockieren.
  *
  * Ziel-Zelle bereits belegt (durch ein ANDERES Gebäude als das gezogene) -> statt die Bewegung
  * abzulehnen, werden beide Gebäude getauscht (User-Wunsch: "Gebäude aufeinander ziehen und
@@ -765,7 +596,8 @@ function finalizeMove(pos: Point) {
 
   const occupantId = occupancy.get(cellKey(cell))
   if (occupantId && occupantId !== movingBuildingId) {
-    const other = findEconomyBuilding(occupantId)
+    if (occupantId === 'spawn') return // Spawn hat sein eigenes Verschiebe-Ziel, kein Tauschpartner
+    const other = findEconomyBuilding(occupantId) ?? towers.find((t) => t.id === occupantId)
     if (!other) return
     const originalCol = moving.col
     const originalRow = moving.row
@@ -778,63 +610,56 @@ function finalizeMove(pos: Point) {
     moving.row = cell.row
   }
   rebuildOccupancy()
+  recomputeEnemyPath()
 }
 
-/** Turm verschieben: snapt auf den nächsten freien Knotenpunkt, der Spawn<->Ziel weiterhin
- * verbunden lässt. Ungültiges Ziel -> Turm bleibt an alter Position. */
+/** Turm verschieben: snapt auf den nächsten freien Knotenpunkt (oder tauscht mit dessen Besitzer,
+ * siehe finalizeMove() — dieselbe Logik gilt jetzt einheitlich für jeden Gebäudetyp). Ungültiges
+ * Ziel (außerhalb des Rasters) -> Turm bleibt an alter Position. */
 function finalizeTowerMove(pos: Point) {
   const tower = towers.find((t) => t.id === movingBuildingId)
   if (!tower) return
-  const cell = nearestCell(defenseGrid, pos.x, pos.y)
-  if (!canPlaceTowerAt(cell, tower.id)) return
-  tower.col = cell.col
-  tower.row = cell.row
-  rebuildDefenseOccupancy()
+  const cell = nearestCell(placementGrid, pos.x, pos.y)
+  if (!canPlaceAt(cell)) return
+
+  const occupantId = occupancy.get(cellKey(cell))
+  if (occupantId && occupantId !== tower.id && occupantId !== 'spawn') {
+    const other = findEconomyBuilding(occupantId) ?? towers.find((t) => t.id === occupantId)
+    if (other) {
+      const originalCol = tower.col
+      const originalRow = tower.row
+      tower.col = other.col
+      tower.row = other.row
+      other.col = originalCol
+      other.row = originalRow
+    }
+  } else if (!occupantId) {
+    tower.col = cell.col
+    tower.row = cell.row
+  }
+  rebuildOccupancy()
   recomputeEnemyPath()
 }
 
 function finalizeTowerPlacement(pos: Point) {
   const kind = placingTowerKind
   if (!kind) return
-  const cell = nearestCell(defenseGrid, pos.x, pos.y)
-
-  if (kind === 'mirror') {
-    if (!canPlaceDefenseMirrorAt(cell)) return
-    if (!canAfford(inventory, 'lumen', BUILDING_COSTS.mirror)) return
-    spend(inventory, 'lumen', BUILDING_COSTS.mirror)
-    defenseMirrors.push(createMirror(cell.col, cell.row))
-    rebuildDefenseOccupancy()
-    recomputeEnemyPath()
-    return
-  }
+  const cell = nearestCell(placementGrid, pos.x, pos.y)
+  if (!canPlaceAt(cell) || occupancy.has(cellKey(cell))) return
 
   const def = getTowerDefinition(kind)
-  if (!canPlaceTowerAt(cell)) return
   if (!canAfford(inventory, 'lumen', def.cost)) return
   spend(inventory, 'lumen', def.cost)
   towers.push(createTower(nextTowerId(), kind, cell.col, cell.row))
-  rebuildDefenseOccupancy()
-  recomputeEnemyPath()
-}
-
-/** Spiegel/Spawn auf dem Defense-Raster verschieben (Zellbelegung wie bei Türmen, kein
- * Weg-Existenz-Check mehr nötig — siehe Datei-Kommentar zum Defense-Knotenraster oben). */
-function finalizeDefenseMirrorMove(pos: Point) {
-  const mirror = defenseMirrors.find((m) => m.id === movingBuildingId)
-  if (!mirror) return
-  const cell = nearestCell(defenseGrid, pos.x, pos.y)
-  if (!canPlaceDefenseMirrorAt(cell, mirror.id)) return
-  mirror.col = cell.col
-  mirror.row = cell.row
-  rebuildDefenseOccupancy()
+  rebuildOccupancy()
   recomputeEnemyPath()
 }
 
 function finalizeSpawnMove(pos: Point) {
-  const cell = nearestCell(defenseGrid, pos.x, pos.y)
+  const cell = nearestCell(placementGrid, pos.x, pos.y)
   if (!canMoveSpawnTo(cell)) return
   spawnNode = cell
-  rebuildDefenseOccupancy()
+  rebuildOccupancy()
   recomputeEnemyPath()
 }
 
@@ -849,7 +674,6 @@ window.addEventListener('pointerup', (e) => {
 
   if (movingBuildingId) {
     if (movingKind === 'tower') finalizeTowerMove(pos)
-    else if (movingKind === 'defense-mirror') finalizeDefenseMirrorMove(pos)
     else if (movingKind === 'spawn') finalizeSpawnMove(pos)
     else finalizeMove(pos)
     movingBuildingId = null
@@ -865,14 +689,12 @@ window.addEventListener('pointerup', (e) => {
 
   if (pendingPress) {
     // Nie über die Bewegungsschwelle hinaus gezogen -> war ein Klick, kein Ziehen. Bei einem
-    // Spiegel (Economy ODER Defense) ODER einem Prisma dreht ein Klick es direkt (User-Vorgabe:
-    // "Prismen müssen auch gedreht werden können, wie Spiegel") statt ein Info-Panel zu öffnen.
-    // Der Spawn dreht ebenso seine Abstrahlrichtung (dasselbe Prinzip wie beim Prisma).
+    // Spiegel ODER einem Prisma dreht ein Klick es direkt (User-Vorgabe: "Prismen müssen auch
+    // gedreht werden können, wie Spiegel") statt ein Info-Panel zu öffnen. Der Spawn dreht ebenso
+    // seine Abstrahlrichtung (dasselbe Prinzip). Ein Spiegel dreht sowohl Licht- als auch
+    // Gegner-Pfad-Richtung (dieselben Objekte, siehe recomputeEnemyPath()).
     if (pendingPress.kind === 'mirror') {
       const mirror = mirrors.find((m) => m.id === pendingPress!.id)
-      if (mirror) rotateMirror(mirror)
-    } else if (pendingPress.kind === 'defense-mirror') {
-      const mirror = defenseMirrors.find((m) => m.id === pendingPress!.id)
       if (mirror) {
         rotateMirror(mirror)
         recomputeEnemyPath()
@@ -890,74 +712,6 @@ window.addEventListener('pointerup', (e) => {
   }
 })
 
-function drawDivider() {
-  // Fest reservierter Streifen zwischen Economy und Defense (siehe MIDDLE_STRIP_WIDTH) — trägt
-  // den Farb-Guide (drawMiddleStrip()) als eigenes Feld statt als blockierendes Popup.
-  ctx!.save()
-  ctx!.fillStyle = '#0b0d12'
-  ctx!.fillRect(economyZoneWidth, HUD_HEIGHT, MIDDLE_STRIP_WIDTH, height - HUD_HEIGHT)
-  ctx!.restore()
-
-  ctx!.save()
-  ctx!.strokeStyle = COLORS.gridLineStrong
-  ctx!.lineWidth = 2
-  ctx!.beginPath()
-  ctx!.moveTo(economyZoneWidth, HUD_HEIGHT)
-  ctx!.lineTo(economyZoneWidth, height)
-  ctx!.moveTo(defenseZoneX, HUD_HEIGHT)
-  ctx!.lineTo(defenseZoneX, height)
-  ctx!.stroke()
-  ctx!.restore()
-
-  ctx!.save()
-  ctx!.fillStyle = COLORS.textDim
-  ctx!.font = '12px monospace'
-  ctx!.fillText('E C O N O M Y', 24, HUD_HEIGHT + 20)
-  ctx!.fillText('D E F E N S E', defenseZoneX + 48, HUD_HEIGHT + 20)
-  ctx!.restore()
-}
-
-const HELP_TOGGLE_RADIUS = 13
-let helpToggleHovered = false
-
-function helpToggleCenter(): Point {
-  return { x: economyZoneWidth + MIDDLE_STRIP_WIDTH / 2, y: HUD_HEIGHT + 24 }
-}
-
-function hitTestHelpToggle(x: number, y: number): boolean {
-  const c = helpToggleCenter()
-  return Math.hypot(c.x - x, c.y - y) <= HELP_TOGGLE_RADIUS + 6
-}
-
-/** Das feste Feld zwischen Economy und Defense (User-Vorgabe: "als Feld... nicht als Popup") —
- * der Toggle klappt NUR den Inhalt auf/zu, der Streifen selbst (siehe drawDivider()) ist immer
- * da. Bewusst NICHT blockierend: beide Spielseiten bleiben klickbar, während der Guide offen ist. */
-function drawMiddleStrip() {
-  const c = helpToggleCenter()
-  drawCircleOutline(ctx!, c.x, c.y, HELP_TOGGLE_RADIUS, COLORS.textBright, 1.5, helpToggleHovered ? 12 : 6)
-  ctx!.save()
-  ctx!.textAlign = 'center'
-  ctx!.textBaseline = 'middle'
-  ctx!.fillStyle = COLORS.textBright
-  ctx!.font = 'bold 13px monospace'
-  ctx!.fillText(colorGuideOpen ? '×' : '?', c.x, c.y + 1)
-  ctx!.restore()
-
-  ctx!.save()
-  ctx!.textAlign = 'center'
-  ctx!.fillStyle = COLORS.textDim
-  ctx!.font = '10px monospace'
-  ctx!.fillText('COLOR GUIDE', c.x, c.y + HELP_TOGGLE_RADIUS + 14)
-  ctx!.restore()
-
-  const listTop = c.y + HELP_TOGGLE_RADIUS + 26
-  if (colorGuideOpen) {
-    drawColorGuideList(ctx!, economyZoneWidth + 12, listTop, MIDDLE_STRIP_WIDTH - 24, height - listTop - 12)
-  } else if (helpToggleHovered) {
-    drawLabel(ctx!, 'Click to open', c.x, c.y - HELP_TOGGLE_RADIUS - 12, '11px monospace', COLORS.textBright, 15)
-  }
-}
-
 function drawEconomyPalette() {
   for (const item of paletteItems) {
     drawPaletteItem(ctx!, item, canAfford(inventory, item.costResourceId, item.cost))
@@ -970,16 +724,16 @@ function drawTowerPalette() {
   }
 }
 
-const TOWER_PALETTE_EXTRA_KINDS = new Set(['mirror', 'expand-grid', 'tower-info'])
+const TOWER_PALETTE_EXTRA_KINDS = new Set(['expand-grid', 'tower-info', 'color-guide'])
 
-/** Hover-Tooltip über einem Kauf-Leisten-Icon (Economy ODER Defense) — Name + kurzer Zweck,
- * siehe paletteItemDescription()/towerPaletteItemDescription(). Nutzt denselben Chip-Look wie das
- * Farbwheel-Panel (drawLabel(), von dort exportiert). */
+/** Hover-Tooltip über einem Kauf-Leisten-Icon — Name + kurzer Zweck, siehe
+ * paletteItemDescription()/towerPaletteItemDescription(). Nutzt denselben Chip-Look wie die
+ * übrigen Panels (drawLabel(), aus shapes.ts). */
 function drawPaletteTooltips() {
   // Sobald ein Modal offen ist, aktualisiert pointermove hoveredEconomyItem/hoveredTowerItem
   // nicht mehr (siehe early returns dort) — ohne diese Sperre würde sonst ein stehen gebliebenes
   // Tooltip vom Icon-Klick, der das Modal gerade erst geöffnet hat, sichtbar bleiben.
-  if (welcomeOpen || wheelMode !== 'closed' || infoTarget || towersInfoOpen) return
+  if (welcomeOpen || infoTarget || towersInfoOpen || colorGuideOpen) return
   if (hoveredEconomyItem) {
     const item = hoveredEconomyItem
     drawLabel(ctx!, paletteItemDescription(item.kind), item.x, item.y - item.radius - 14, '11px monospace', COLORS.textBright, 15)
@@ -993,19 +747,10 @@ function drawPaletteTooltips() {
 
 function drawTowerPlacementPreview() {
   if (!placingTowerKind || !placingTowerCursor) return
-  const cell = nearestCell(defenseGrid, placingTowerCursor.x, placingTowerCursor.y)
-  const center = cellCenter(defenseGrid, cell)
+  const cell = nearestCell(placementGrid, placingTowerCursor.x, placingTowerCursor.y)
+  const center = cellCenter(placementGrid, cell)
 
-  if (placingTowerKind === 'mirror') {
-    drawCellHighlight(ctx!, defenseGrid, cell, canPlaceDefenseMirrorAt(cell) ? '#39ff8f' : '#ff3355', 0.3)
-    ctx!.save()
-    ctx!.globalAlpha = 0.6
-    drawMirrorEntity(ctx!, { id: 'preview', kind: 'mirror', col: cell.col, row: cell.row, orientation: 0 }, center, defenseGrid.cellSize)
-    ctx!.restore()
-    return
-  }
-
-  const valid = canPlaceTowerAt(cell)
+  const valid = canPlaceAt(cell) && !occupancy.has(cellKey(cell))
   if (!valid) {
     ctx!.save()
     ctx!.globalAlpha = 0.35
@@ -1034,23 +779,9 @@ function drawTowers() {
   }
 }
 
-/** Defense-Knotenraster: Raster selbst + Spiegel + Gegner-Pfad (inkl. Spawn-Marker, siehe
- * towerdefense/path.ts) + Verschiebe-Vorschau (siehe drawMovePreview()/drawTowerPlacementPreview()). */
-function drawDefenseNetwork() {
-  drawPlacementGrid(ctx!, defenseGrid, COLORS.gridLineStrong)
-  ctx!.save()
-  ctx!.fillStyle = COLORS.textDim
-  ctx!.font = '11px monospace'
-  ctx!.fillText('N O D E S', defenseGrid.originX, defenseGrid.originY - 12)
-  ctx!.restore()
-
-  drawPath(ctx!, enemyPathPixels, pathTargetTowerId !== null)
-  for (const mirror of defenseMirrors) drawMirrorEntity(ctx!, mirror, defenseMirrorCenter(mirror), defenseGrid.cellSize)
-}
-
-/** Wellenstand rechts neben dem "D E F E N S E"-Label (siehe towerdefense/waves.ts) — Wellen-
- * nummer + Boss-Hinweis (jede 10. Welle) plus Spawn-Fortschritt bzw. Pause-Countdown, sowie
- * darunter die HP der Gegner dieser Welle (User-Vorgabe) — inkl. Boss-HP, falls vorhanden. */
+/** Wellenstand rechts oben (siehe towerdefense/waves.ts) — Wellennummer + Boss-Hinweis (jede 10.
+ * Welle) plus Spawn-Fortschritt bzw. Pause-Countdown, sowie darunter die HP der Gegner dieser
+ * Welle (User-Vorgabe) — inkl. Boss-HP, falls vorhanden. */
 function drawWaveStatus() {
   const boss = isBossWave(waveState.currentWave)
   const status =
@@ -1079,7 +810,7 @@ interface LoadoutSummaryEntry {
 /** Aktuell platzierte Türme, gruppiert nach Konfiguration (Turmart + Munitionsfarbe, siehe
  * towerdefense/towers.ts loadoutKey()) — EIN Eintrag je Konfiguration, unabhängig davon, wie
  * viele Türme genau dieser Art/Farbe gerade stehen (User-Vorgabe: "nur 1x pro Art"). Türme ohne
- * gewählte Munition zählen nicht mit (haben noch keine "Konfiguration"). Sortiert nach Turmart
+ * aktuelle Munition zählen nicht mit (haben noch keine "Konfiguration"). Sortiert nach Turmart
  * (Reihenfolge der Kauf-Leiste) dann Ressourcen-Tier, für eine stabile, nicht "springende"
  * Reihenfolge zwischen Frames. */
 function currentLoadoutSummary(): LoadoutSummaryEntry[] {
@@ -1101,15 +832,14 @@ function currentLoadoutSummary(): LoadoutSummaryEntry[] {
 
 const LOADOUT_SUMMARY_WIDTH = 230
 
-/** Listet unter dem Defense-Raster (siehe drawWaveStatus() für den Platz darüber, hier ist
- * genug Raum für eine beliebig lange Liste) je Turm-Konfiguration die Anzahl + den bisher
- * insgesamt damit angerichteten Treffer-Schaden (User-Vorgabe). */
+/** Listet unter dem Raster je Turm-Konfiguration die Anzahl + den bisher insgesamt damit
+ * angerichteten Treffer-Schaden (User-Vorgabe). */
 function drawTowerLoadoutSummary() {
   const entries = currentLoadoutSummary()
   if (entries.length === 0) return
 
-  const x = defenseGrid.originX
-  let y = defenseGrid.originY + gridPixelHeight(defenseGrid) + 34
+  const x = placementGrid.originX
+  let y = placementGrid.originY + gridPixelHeight(placementGrid) + 34
 
   ctx!.save()
   ctx!.textAlign = 'left'
@@ -1150,7 +880,7 @@ function drawInfoPanel() {
   }
 
   let anchor: Point
-  let rowsInput: { label: string; value: string; action?: 'ammo' | 'level' }[]
+  let rowsInput: { label: string; value: string; action?: 'level' }[]
 
   if (infoTarget.kind === 'source') {
     const source = lightSources.find((s) => s.id === infoTarget!.id)
@@ -1166,24 +896,7 @@ function drawInfoPanel() {
       { label: 'Color', value: getResource(source.resourceId).name },
       { label: 'Level', value: maxed ? `${source.level}/${GENERATOR_MAX_LEVEL} (max)` : `${source.level}/${GENERATOR_MAX_LEVEL} (Lv.${source.level + 1}: ${generatorUpgradeCost(source.level + 1)} lumen)`, action: maxed ? undefined : 'level' },
       { label: 'Range', value: `${source.range} cells` },
-      { label: 'Status', value: active ? 'Delivering' : 'Idle (no container in range)' },
-    ]
-  } else if (infoTarget.kind === 'container') {
-    const container = containers.find((c) => c.id === infoTarget!.id)
-    if (!container) {
-      infoTarget = null
-      return
-    }
-    anchor = buildingCenter(container)
-    const rates = lightSimulation.containerRates.get(container.id)
-    const rateRows = rates
-      ? [...rates].map(([resourceId, rate]) => ({ label: getResource(resourceId).name, value: `${rate.toFixed(1)}/s` }))
-      : [{ label: 'Receiving', value: '—' }]
-    const maxed = container.level >= CONTAINER_MAX_LEVEL
-    rowsInput = [
-      { label: 'Name', value: 'Container' },
-      { label: 'Level', value: maxed ? `${container.level}/${CONTAINER_MAX_LEVEL} (max)` : `${container.level}/${CONTAINER_MAX_LEVEL} (Lv.${container.level + 1}: ${containerUpgradeCost(container.level + 1)} lumen)`, action: maxed ? undefined : 'level' },
-      ...rateRows,
+      { label: 'Status', value: active ? 'Delivering' : 'Idle (no tower in range)' },
     ]
   } else {
     const tower = towers.find((t) => t.id === infoTarget!.id)
@@ -1194,11 +907,14 @@ function drawInfoPanel() {
     anchor = towerCenter(tower)
     const def = getTowerDefinition(tower.kind)
     const stats = getEffectiveTowerStats(tower)
-    const ammoLabel = tower.resourceId ? getResource(tower.resourceId).name : '— (choose)'
+    const ammo = lightSimulation.towerAmmo.get(tower.id)
+    const ammoLabel = tower.resourceId
+      ? `${getResource(tower.resourceId).name} (strength ${ammo?.strength ?? 0})`
+      : '— (not connected)'
     const maxed = tower.level >= TOWER_MAX_LEVEL
     rowsInput = [
       { label: 'Name', value: def.name },
-      { label: 'Ammo', value: hasAmmoAvailable(tower) ? ammoLabel : `${ammoLabel} (Shortage!)`, action: 'ammo' },
+      { label: 'Ammo', value: tower.resourceId && !hasAmmoAvailable(tower) ? `${ammoLabel} (Shortage!)` : ammoLabel },
       { label: 'Level', value: maxed ? `${tower.level}/${TOWER_MAX_LEVEL} (max)` : `${tower.level}/${TOWER_MAX_LEVEL} (next: ${towerUpgradeCost(def, tower.level + 1)} lumen)`, action: maxed ? undefined : 'level' },
       { label: 'Damage', value: stats.damage.toFixed(1) },
       { label: 'Range', value: `${stats.range.toFixed(0)}px` },
@@ -1281,7 +997,6 @@ function placementCost(kind: PaletteKind): number {
   if (kind === 'mirror') return BUILDING_COSTS.mirror
   if (kind === 'prism-simple') return BUILDING_COSTS.prismSimple
   if (kind === 'prism-complex') return BUILDING_COSTS.prismComplex
-  if (kind === 'container') return BUILDING_COSTS.container
   return BUILDING_COSTS.source
 }
 
@@ -1332,19 +1047,6 @@ function drawPaletteGhost(kind: PaletteKind, pos: Point) {
     }
     ctx!.closePath()
     ctx!.stroke()
-  } else if (kind === 'container') {
-    ctx!.strokeStyle = COLORS.textBright
-    ctx!.lineWidth = 2
-    ctx!.beginPath()
-    for (let i = 0; i < 6; i++) {
-      const angle = -Math.PI / 2 + (i * 2 * Math.PI) / 6
-      const px = pos.x + CONTAINER_SIZE * Math.cos(angle)
-      const py = pos.y + CONTAINER_SIZE * Math.sin(angle)
-      if (i === 0) ctx!.moveTo(px, py)
-      else ctx!.lineTo(px, py)
-    }
-    ctx!.closePath()
-    ctx!.stroke()
   }
   ctx!.restore()
 }
@@ -1355,9 +1057,9 @@ function drawMovePreview() {
   if (movingKind === 'tower') {
     const tower = towers.find((t) => t.id === movingBuildingId)
     if (!tower) return
-    const cell = nearestCell(defenseGrid, movingCursor.x, movingCursor.y)
-    const valid = canPlaceTowerAt(cell, tower.id)
-    const center = cellCenter(defenseGrid, cell)
+    const cell = nearestCell(placementGrid, movingCursor.x, movingCursor.y)
+    const valid = canPlaceAt(cell)
+    const center = cellCenter(placementGrid, cell)
     if (!valid) {
       ctx!.save()
       ctx!.globalAlpha = 0.35
@@ -1375,25 +1077,11 @@ function drawMovePreview() {
     return
   }
 
-  if (movingKind === 'defense-mirror') {
-    const mirror = defenseMirrors.find((m) => m.id === movingBuildingId)
-    if (!mirror) return
-    const cell = nearestCell(defenseGrid, movingCursor.x, movingCursor.y)
-    const valid = canPlaceDefenseMirrorAt(cell, mirror.id)
-    const center = cellCenter(defenseGrid, cell)
-    drawCellHighlight(ctx!, defenseGrid, cell, valid ? '#39ff8f' : '#ff3355', 0.3)
-    ctx!.save()
-    ctx!.globalAlpha = 0.6
-    drawMirrorEntity(ctx!, mirror, center, defenseGrid.cellSize)
-    ctx!.restore()
-    return
-  }
-
   if (movingKind === 'spawn') {
-    const cell = nearestCell(defenseGrid, movingCursor.x, movingCursor.y)
+    const cell = nearestCell(placementGrid, movingCursor.x, movingCursor.y)
     const valid = canMoveSpawnTo(cell)
-    const center = cellCenter(defenseGrid, cell)
-    drawCellHighlight(ctx!, defenseGrid, cell, valid ? '#39ff8f' : '#ff3355', 0.3)
+    const center = cellCenter(placementGrid, cell)
+    drawCellHighlight(ctx!, placementGrid, cell, valid ? '#39ff8f' : '#ff3355', 0.3)
     ctx!.save()
     ctx!.globalAlpha = 0.7
     drawHexagon(ctx!, center.x, center.y, 14, COLORS.enemy, 0, 18)
@@ -1420,11 +1108,6 @@ function drawMovePreview() {
     if (!prism) return
     valid = !!cell && (!occupancy.has(cellKey(cell)) || occupancy.get(cellKey(cell)) === prism.id)
     kind = prism.prismKind === 'triangle' ? 'prism-simple' : 'prism-complex'
-  } else if (movingKind === 'container') {
-    const container = containers.find((c) => c.id === movingBuildingId)
-    if (!container) return
-    valid = !!cell && (!occupancy.has(cellKey(cell)) || occupancy.get(cellKey(cell)) === container.id)
-    kind = 'container'
   }
   if (!kind) return
 
@@ -1433,14 +1116,14 @@ function drawMovePreview() {
   drawPaletteGhost(kind, previewPos)
 }
 
-function drawBuildings() {
+/** Das gemeinsame Raster: Rasterlinien + Gegner-Pfad (inkl. Spawn-Marker) + Lichtstrahlen +
+ * Max-Level-Marker + alle Gebäude (Lichtquellen/Spiegel/Prismen) — Türme werden separat danach
+ * gezeichnet (siehe drawTowers(), für die richtige Ziel-Priorität beim Klicken sowie den
+ * "Shortage"-Alpha-Effekt). */
+function drawWorld() {
   drawPlacementGrid(ctx!, placementGrid, COLORS.gridLineStrong)
-  ctx!.save()
-  ctx!.fillStyle = COLORS.textDim
-  ctx!.font = '11px monospace'
-  ctx!.textAlign = 'right'
-  ctx!.fillText('L I G H T', placementGrid.originX + gridPixelWidth(placementGrid), placementGrid.originY - 12)
-  ctx!.restore()
+
+  drawPath(ctx!, enemyPathPixels, pathHitBlockerId !== null)
 
   for (const segment of lightSimulation.segments) drawBeamSegment(ctx!, placementGrid, segment)
   for (const segment of lightSimulation.segments) {
@@ -1453,9 +1136,6 @@ function drawBuildings() {
   for (const source of lightSources) {
     if (isSourceMaxed(source)) drawMaxLevelCellMarker(ctx!, placementGrid, { col: source.col, row: source.row })
   }
-  for (const container of containers) {
-    if (isContainerMaxed(container)) drawMaxLevelCellMarker(ctx!, placementGrid, { col: container.col, row: container.row })
-  }
 
   for (const source of lightSources) drawLightSourceEntity(ctx!, source, buildingCenter(source), elapsedSeconds)
   for (const mirror of mirrors) drawMirrorEntity(ctx!, mirror, buildingCenter(mirror), placementGrid.cellSize)
@@ -1463,61 +1143,33 @@ function drawBuildings() {
     const status = lightSimulation.prismStatus.get(prism.id)
     if (status) drawPrismEntity(ctx!, prism, buildingCenter(prism), status, elapsedSeconds)
   }
-  for (const container of containers) {
-    const rates = lightSimulation.containerRates.get(container.id)
-    drawContainerEntity(ctx!, container, buildingCenter(container), rates ? [...rates.keys()] : [])
-  }
 }
 
 let elapsedSeconds = 0
 
-/** Aktuelle Netto-Produktionsrate (Einheiten/Sekunde) je Ressource: die "Brutto"-Rate aus der
- * Licht-Simulation (siehe recomputeLightSimulation()) abzüglich der `consumption` jedes Turms mit
- * zugewiesener Munition (siehe towerdefense/towers.ts getEffectiveTowerStats() — ersetzt den
- * früheren globalen TOWER_AMMO_DRAIN durch einen echten Per-Turm-Wert). `excludeTowerId` blendet
- * einen Turm aus der Drain-Berechnung aus (z. B. den, dessen Munition gerade neu gewählt wird —
- * sonst würde er sich durch seine eigene aktuelle Wahl selbst blockieren). */
-function computeResourceRates(excludeTowerId?: string): Map<string, number> {
-  const rates = new Map(lightSimulation.totalRates)
-  for (const tower of towers) {
-    if (!tower.resourceId || tower.id === excludeTowerId) continue
-    rates.set(tower.resourceId, (rates.get(tower.resourceId) ?? 0) - getEffectiveTowerStats(tower).consumption)
-  }
-  for (const [id, rate] of rates) rates.set(id, Math.max(0, rate))
-  return rates
-}
-
-/** Ressourcen, deren aktuelle Rate nicht ausreicht, um sie DIESEM Turm als Munition zuzuweisen
- * (< seine eigene `consumption` frei, nach Abzug aller ANDEREN Verbraucher). */
-function unavailableAmmoIds(targetTowerId: string): Set<string> {
-  const targetTower = towers.find((t) => t.id === targetTowerId)
-  const consumption = targetTower ? getEffectiveTowerStats(targetTower).consumption : 0
-  const rates = computeResourceRates(targetTowerId)
-  const disabled = new Set<string>()
-  for (const resource of RESOURCES) {
-    if ((rates.get(resource.id) ?? 0) < consumption) disabled.add(resource.id)
-  }
-  return disabled
-}
-
-/** Ob ein Turm gerade tatsächlich feuern kann: ohne Munition immer ja (Klarschuss ohne Effekt),
- * mit Munition nur, solange deren Netto-Rate (ohne den eigenen Drain dieses Turms) noch reicht —
- * geht die Ressource aus, hört der Turm auf zu schießen, statt weiter "auf Kredit" zu feuern. */
+/** Ob ein Turm gerade tatsächlich feuern kann: ohne Verkabelung immer ja (Klarschuss ohne
+ * Effekt), verkabelt nur, solange die ankommende Strahl-Stärke seine `consumption` deckt — geht
+ * die Strahl-Stärke unter den Bedarf, hört der Turm auf zu schießen, statt weiter "auf Kredit" zu
+ * feuern (siehe economy/lightSimulation.ts für die Stärke-Berechnung). */
 function hasAmmoAvailable(tower: PlacedTower): boolean {
   if (!tower.resourceId) return true
-  return (computeResourceRates(tower.id).get(tower.resourceId) ?? 0) >= getEffectiveTowerStats(tower).consumption
+  const ammo = lightSimulation.towerAmmo.get(tower.id)
+  return (ammo?.strength ?? 0) >= getEffectiveTowerStats(tower).consumption
 }
 
 function economyTick(dt: number) {
   elapsedSeconds += dt
   recomputeLightSimulation()
-  for (const [resourceId, rate] of computeResourceRates()) {
-    if (rate > 0) addToInventory(inventory, resourceId, rate * dt)
+  // Munition kommt jetzt live aus der Strahl-Verkabelung (User-Vorgabe) — kein manuelles
+  // Zuweisen mehr, kein globaler Ratenpool: jeder Turm übernimmt jeden Frame direkt, welche Farbe
+  // (falls überhaupt eine) ihn gerade erreicht (siehe economy/lightSimulation.ts towerAmmo).
+  for (const tower of towers) {
+    tower.resourceId = lightSimulation.towerAmmo.get(tower.id)?.resourceId ?? null
   }
 }
 
 function combatTick(dt: number) {
-  if (!defenseReady) return
+  if (!worldReady) return
 
   tickWaveSpawning(waveState, dt, enemies)
 
@@ -1543,14 +1195,11 @@ function render(_dt: number) {
   ctx!.fillStyle = COLORS.background
   ctx!.fillRect(0, 0, width, height)
 
-  drawDivider()
-  drawMiddleStrip()
   drawEconomyPalette()
-  drawBuildings()
   drawTowerPalette()
   drawPaletteTooltips()
   drawWaveStatus()
-  drawDefenseNetwork()
+  drawWorld()
   drawTowerLoadoutSummary()
   drawTowers()
   drawTowerCombatEffects(ctx!, towers, enemies, enemyPathPixels, towerCenter)
@@ -1559,13 +1208,10 @@ function render(_dt: number) {
   drawProjectiles(ctx!, projectiles)
   drawVisualEffects(ctx!, visualEffects, elapsedSeconds)
 
-  drawHud(ctx!, width, inventory, computeResourceRates(), playerName, playerLevel, hudButtons, demolishMode)
-
-  if (wheelMode === 'ammo' && ammoTargetTowerId) {
-    drawColorWheelPanel(ctx!, width, height, wheelSwatches, hoveredWheelResourceId, computeResourceRates(ammoTargetTowerId), unavailableAmmoIds(ammoTargetTowerId))
-  }
+  drawHud(ctx!, width, inventory, playerName, playerLevel, hudButtons, demolishMode)
 
   if (towersInfoOpen) drawTowerReferencePanel(ctx!, width, height)
+  if (colorGuideOpen) drawColorGuidePanel(ctx!, width, height)
 
   drawInfoPanel()
 

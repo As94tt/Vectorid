@@ -51,23 +51,33 @@
 // gemeinsamen Zelle und stoppen dort beide. Das lässt sich nur erkennen, wenn ALLE Strahlen
 // GEMEINSAM Schritt für Schritt vorrücken (statt wie zuvor einer nach dem anderen komplett
 // durchgerechnet zu werden) — siehe `traceAllFronts()`. Gilt weiterhin nur für leere Zellen:
-// Spiegel/Prismen/Container dürfen von beliebig vielen Strahlen gleichzeitig besucht werden (das
+// Spiegel/Prismen/Türme dürfen von beliebig vielen Strahlen gleichzeitig besucht werden (das
 // ist ja der Sinn eines Sammelpunkts).
 //
 // Strahl-"Stärke" (User-Vorgabe, ersetzt die frühere feste Rate/Sekunde je Lichtquelle bzw.
 // Ausgabe-Rate je Prisma): ein Strahl hat an jeder Zelle die Stärke = wie viele Zellen er von DORT
 // aus noch zurücklegen könnte (`Front.stepsLeft`, siehe unten) — ein Level-1-Generator (Reichweite
-// 3) liefert an einen 1 Zelle entfernten Container also Stärke 2. Erreicht ein Strahl stattdessen
-// ein Prisma, zählt NUR diese Stärke (nicht Farbe/Rezept) mit in dessen Durchschnitt ein (siehe
-// `registerHit()`): kommen mehrere Strahlen an, wird ihre Stärke addiert und durch ihre Anzahl
-// geteilt (Standard-Rundung), und GENAU dieser Wert ist dann sowohl die Stärke, mit der das
+// 3) liefert an einen 1 Zelle entfernten Turm also Stärke 2, und GENAU das ist dann die Menge, mit
+// der dieser Turm gerade "versorgt" ist (siehe main.ts hasAmmoAvailable()). Erreicht ein Strahl
+// stattdessen ein Prisma, zählt NUR diese Stärke (nicht Farbe/Rezept) mit in dessen Durchschnitt
+// ein (siehe `registerHit()`): kommen mehrere Strahlen an, wird ihre Stärke addiert und durch ihre
+// Anzahl geteilt (Standard-Rundung), und GENAU dieser Wert ist dann sowohl die Stärke, mit der das
 // Prisma (sobald sein Rezept erfüllt ist) selbst weiterstrahlt, als auch entsprechend viele Zellen
 // weit reicht (siehe `prismAvgStrength`/`simulateLight()`) — Prismen haben dafür kein eigenes
 // Level mehr (User-Vorgabe, entfernt).
+//
+// Türme als Strahl-Ziel (User-Vorgabe, ersetzt Container): ein Strahl, der einen Turm erreicht,
+// liefert genau wie früher bei einem Container seine Farbe + Stärke dorthin (siehe `hitTower`
+// unten) — das IST jetzt die Munition des Turms, keine manuelle Auswahl mehr nötig (siehe
+// main.ts). Erreichen MEHRERE, unterschiedlich gefärbte Strahlen denselben Turm im selben
+// Durchlauf, gewinnt der zuerst in `fronts` verarbeitete (siehe `tracePass()` — dieselbe stabile
+// "erster gewinnt"-Reihenfolge, mit der Container früher ihre Kapazitäts-Slots vergeben haben).
+// Anders als ein Dreieck-Prisma nimmt ein Turm einen Strahl aus JEDER der 6 Richtungen an (wie ein
+// Hexagon-Prisma) — er hat keine "Seiten", die eine Form vorgeben.
 
 import { RESOURCES, getResource, type ResourceDefinition } from '../data/resources'
 import { cellKey, hexNeighbor, inBounds, type GridCoord, type HexDirection, type PlacementGrid } from '../grid/placementGrid'
-import { CONTAINER_CAPACITY_BY_LEVEL, reflect, type Container, type EconomyBuilding, type LightColor, type LightSource, type Mirror, type Prism } from './buildings'
+import { reflect, type EconomyBuilding, type LightColor, type LightSource, type Mirror, type Prism } from './buildings'
 
 const HEX_DIRECTIONS: HexDirection[] = [0, 1, 2, 3, 4, 5]
 
@@ -76,9 +86,9 @@ export interface BeamSegment {
   cells: GridCoord[]
   color: string
   resourceId: string
-  /** true, wenn dieser Strahl tatsächlich einen Container oder ein weiteres Prisma erreicht hat
-   * (nicht bloß am Rasterrand/der Reichweite/einer Kollision geendet ist) — steuert, ob ein
-   * fliegendes Partikel entlang dieses Pfads animiert wird (siehe `drawBeamTraveler()` in
+  /** true, wenn dieser Strahl tatsächlich einen Turm oder ein weiteres Prisma erreicht hat (nicht
+   * bloß am Rasterrand/der Reichweite/einer Kollision geendet ist) — steuert, ob ein fliegendes
+   * Partikel entlang dieses Pfads animiert wird (siehe `drawBeamTraveler()` in
    * render/buildingRender.ts, User-Vorgabe: "Kugel soll entlang der Verbindung fliegen, sofern
    * ein Endpunkt existiert"). */
   reachedEndpoint: boolean
@@ -104,21 +114,32 @@ export interface SimulationResult {
   segments: BeamSegment[]
   /** Prisma-Id -> aktueller Status. */
   prismStatus: Map<string, PrismStatus>
-  /** Container-Id -> (Ressourcen-Id -> Rate/Sekunde, die dieser Container gerade davon einfängt). */
-  containerRates: Map<string, Map<string, number>>
-  /** Summe über alle Container je Ressourcen-Id — die "Brutto"-Produktionsrate fürs Inventar. */
-  totalRates: Map<string, number>
-  /** Lichtquellen-Ids, deren Strahl gerade (direkt oder über Spiegel) mindestens einen
-   * Container erreicht — fürs Info-Panel ("liefert gerade" vs. "läuft ins Leere"). */
+  /** Turm-Id -> die Farbe + Stärke, die ihn gerade (direkt oder über Spiegel/Prismen) erreicht —
+   * das IST seine aktuelle Munition (siehe main.ts economyTick()/hasAmmoAvailable()), keine
+   * manuelle Auswahl mehr. Kein Eintrag = gerade kein Strahl angeschlossen. */
+  towerAmmo: Map<string, { resourceId: string; strength: number }>
+  /** Lichtquellen-Ids, deren Strahl gerade (direkt oder über Spiegel) mindestens einen Turm
+   * erreicht — fürs Info-Panel ("liefert gerade" vs. "läuft ins Leere"). */
   activeSourceIds: Set<string>
 }
 
-function buildLookup(sources: LightSource[], mirrors: Mirror[], prisms: Prism[], containers: Container[]): Map<string, EconomyBuilding> {
-  const map = new Map<string, EconomyBuilding>()
+/** Occupant-Sicht der Licht-Simulation auf einen Turm — nur die Id, keine Turm-Details nötig (und
+ * ausdrücklich NICHT der rohe `PlacedTower`: dessen `.kind` ist `TowerKind` ('pulse'|'sniper'|…),
+ * kein generisches `'tower'`-Tag, würde also nie auf den `occupant.kind === 'tower'`-Zweig unten
+ * matchen). Nimmt bewusst nur `{id, col, row}` entgegen (siehe `simulateLight()`), damit dieses
+ * Economy-Modul nicht von towerdefense/towers.ts abhängen muss. */
+interface TowerOccupant {
+  kind: 'tower'
+  id: string
+}
+type LightOccupant = EconomyBuilding | TowerOccupant
+
+function buildLookup(sources: LightSource[], mirrors: Mirror[], prisms: Prism[], towers: { id: string; col: number; row: number }[]): Map<string, LightOccupant> {
+  const map = new Map<string, LightOccupant>()
   for (const s of sources) map.set(cellKey(s), s)
   for (const m of mirrors) map.set(cellKey(m), m)
   for (const p of prisms) map.set(cellKey(p), p)
-  for (const c of containers) map.set(cellKey(c), c)
+  for (const t of towers) map.set(cellKey(t), { kind: 'tower', id: t.id })
   return map
 }
 
@@ -165,14 +186,14 @@ interface Front {
   isRawSource: boolean
   sourceId?: string
   /** Wie viele weitere Zellen dieser Strahl noch zurücklegen kann — sinkt mit jedem Schritt um 1.
-   * Das ist zugleich seine "Stärke" (User-Vorgabe): kommt er bei einem Container oder Prisma an,
-   * ist der dort gerade noch übrige Wert (NACH dem letzten Schritt) genau die Menge, die
-   * ankommt/weitergegeben wird — siehe `addContainerRate()`/`registerHit()`. */
+   * Das ist zugleich seine "Stärke" (User-Vorgabe): kommt er bei einem Turm oder Prisma an, ist
+   * der dort gerade noch übrige Wert (NACH dem letzten Schritt) genau die Menge, die
+   * ankommt/weitergegeben wird — siehe die `hitTower`-Zuweisung in `traceAllFronts()`/`registerHit()`. */
   stepsLeft: number
   alive: boolean
   reachedEndpoint: boolean
   hitPrism?: { prism: Prism; fromDirection: HexDirection }
-  hitContainer?: Container
+  hitTower?: { towerId: string; resourceId: string; strength: number }
 }
 
 /**
@@ -191,14 +212,14 @@ interface Front {
  * Alles andere (unterschiedliche, nicht-entgegengesetzte Richtungen durch dieselbe Zelle) kreuzt
  * sich frei, ohne Wechselwirkung.
  */
-function traceAllFronts(grid: PlacementGrid, lookup: Map<string, EconomyBuilding>, fronts: Front[]) {
+function traceAllFronts(grid: PlacementGrid, lookup: Map<string, LightOccupant>, fronts: Front[]) {
   const maxSteps = fronts.reduce((max, f) => Math.max(max, f.stepsLeft), 0)
 
   for (let step = 0; step < maxSteps; step++) {
     const alive = fronts.filter((f) => f.alive)
     if (alive.length === 0) break
 
-    const proposals: { front: Front; current: GridCoord; next: GridCoord; key: string; occupant?: EconomyBuilding }[] = []
+    const proposals: { front: Front; current: GridCoord; next: GridCoord; key: string; occupant?: LightOccupant }[] = []
     for (const front of alive) {
       if (front.stepsLeft <= 0) {
         front.alive = false
@@ -263,11 +284,13 @@ function traceAllFronts(grid: PlacementGrid, lookup: Map<string, EconomyBuilding
         front.direction = reflect(front.direction, occupant.orientation)
         continue
       }
-      if (occupant.kind === 'container') {
+      if (occupant.kind === 'tower') {
+        // Wie ein Hexagon-Prisma (nicht wie ein Dreieck) nimmt ein Turm einen Strahl aus JEDER
+        // der 6 Richtungen an — er hat keine "Seiten", die eine Form vorgeben.
         front.cells.push(next)
         front.alive = false
         front.reachedEndpoint = true
-        front.hitContainer = occupant
+        front.hitTower = { towerId: occupant.id, resourceId: front.resourceId, strength: front.stepsLeft }
         continue
       }
       if (occupant.kind === 'prism') {
@@ -302,7 +325,9 @@ interface TracePass {
    * erreicht haben (siehe `registerHit()`) — das ist die Stärke, mit der es selbst (sobald sein
    * Rezept erfüllt ist) im NÄCHSTEN Durchlauf weiterstrahlt (siehe `simulateLight()`). */
   prismAvgStrength: Map<string, number>
-  containerRates: Map<string, Map<string, number>>
+  /** Turm-Id -> Farbe + Stärke des ERSTEN Strahls, der ihn in diesem Durchlauf erreicht hat (siehe
+   * `simulateLight()`-Dateikommentar zu "erster gewinnt" bei mehrfarbigen Treffern). */
+  towerHits: Map<string, { resourceId: string; strength: number }>
   activeSourceIds: Set<string>
 }
 
@@ -317,7 +342,7 @@ function roundStrength(value: number): number {
  * (siehe `prismStrengths`/`prismAvgStrength`). */
 function tracePass(
   grid: PlacementGrid,
-  lookup: Map<string, EconomyBuilding>,
+  lookup: Map<string, LightOccupant>,
   sources: LightSource[],
   prisms: Prism[],
   prismOutputs: Map<string, ResourceDefinition | null>,
@@ -367,19 +392,8 @@ function tracePass(
   const prismColors = new Map<string, Set<string>>()
   const prismSides = new Map<string, Set<HexDirection>>()
   const prismStrengthSums = new Map<string, { sum: number; count: number }>()
-  const containerRates = new Map<string, Map<string, number>>()
+  const towerHits = new Map<string, { resourceId: string; strength: number }>()
   const activeSourceIds = new Set<string>()
-
-  function addContainerRate(container: Container, resourceId: string, rate: number) {
-    const perResource = containerRates.get(container.id) ?? new Map<string, number>()
-    // Kapazität nach Level (siehe buildings.ts CONTAINER_CAPACITY_BY_LEVEL): eine NEUE Farbe, die
-    // die Kapazität sprengen würde, wird ignoriert — die zuerst angekommenen Farben "gewinnen"
-    // ihren Kapazitäts-Slot dauerhaft, bereits gehaltene Farben werden weiter normal aktualisiert.
-    const capacity = CONTAINER_CAPACITY_BY_LEVEL[container.level - 1] ?? CONTAINER_CAPACITY_BY_LEVEL[CONTAINER_CAPACITY_BY_LEVEL.length - 1]
-    if (!perResource.has(resourceId) && perResource.size >= capacity) return
-    perResource.set(resourceId, (perResource.get(resourceId) ?? 0) + rate)
-    containerRates.set(container.id, perResource)
-  }
 
   function registerHit(prism: Prism, travelDirection: HexDirection, resourceId: string, isRawSource: boolean, strength: number) {
     // `travelDirection` ist die Richtung, in die der Strahl unterwegs war, als er die Zelle
@@ -413,8 +427,14 @@ function tracePass(
       segments.push({ cells: front.cells, color: front.color, resourceId: front.resourceId, reachedEndpoint: front.reachedEndpoint })
     }
     if (front.hitPrism) registerHit(front.hitPrism.prism, front.hitPrism.fromDirection, front.resourceId, front.isRawSource, front.stepsLeft)
-    if (front.hitContainer) {
-      addContainerRate(front.hitContainer, front.resourceId, front.stepsLeft)
+    if (front.hitTower) {
+      // "Erster gewinnt" (User-Vorgabe): kommt später in dieser Schleife noch ein zweiter,
+      // andersfarbiger Strahl an demselben Turm an, wird er ignoriert — die Reihenfolge hier ist
+      // stets Quellen (in Array-Reihenfolge, alle 6 Richtungen) dann Prismen (in Array-Reihenfolge),
+      // Durchlauf für Durchlauf identisch, also eine stabile, nicht "flackernde" Priorität.
+      if (!towerHits.has(front.hitTower.towerId)) {
+        towerHits.set(front.hitTower.towerId, { resourceId: front.hitTower.resourceId, strength: front.hitTower.strength })
+      }
       if (front.isRawSource && front.sourceId) activeSourceIds.add(front.sourceId)
     }
   }
@@ -424,7 +444,7 @@ function tracePass(
     if (count > 0) prismAvgStrength.set(prismId, roundStrength(sum / count))
   }
 
-  return { segments, prismCounts, prismColors, prismSides, prismAvgStrength, containerRates, activeSourceIds }
+  return { segments, prismCounts, prismColors, prismSides, prismAvgStrength, towerHits, activeSourceIds }
 }
 
 function resolveTriangleOutput(presentColors: Set<string>): ResourceDefinition | null {
@@ -457,8 +477,14 @@ function resolveHexagonOutput(counts: { c: number; m: number; y: number }, prese
   return null
 }
 
-export function simulateLight(grid: PlacementGrid, sources: LightSource[], mirrors: Mirror[], prisms: Prism[], containers: Container[]): SimulationResult {
-  const lookup = buildLookup(sources, mirrors, prisms, containers)
+export function simulateLight(
+  grid: PlacementGrid,
+  sources: LightSource[],
+  mirrors: Mirror[],
+  prisms: Prism[],
+  towers: { id: string; col: number; row: number }[],
+): SimulationResult {
+  const lookup = buildLookup(sources, mirrors, prisms, towers)
 
   let prismOutputs = new Map<string, ResourceDefinition | null>(prisms.map((p) => [p.id, null]))
   // Effektive Output-Richtung je Prisma — Default = die per Klick gewählte Rotation
@@ -515,10 +541,5 @@ export function simulateLight(grid: PlacementGrid, sources: LightSource[], mirro
     })
   }
 
-  const totalRates = new Map<string, number>()
-  for (const perResource of pass.containerRates.values()) {
-    for (const [resourceId, rate] of perResource) totalRates.set(resourceId, (totalRates.get(resourceId) ?? 0) + rate)
-  }
-
-  return { segments: pass.segments, prismStatus, containerRates: pass.containerRates, totalRates, activeSourceIds: pass.activeSourceIds }
+  return { segments: pass.segments, prismStatus, towerAmmo: pass.towerHits, activeSourceIds: pass.activeSourceIds }
 }

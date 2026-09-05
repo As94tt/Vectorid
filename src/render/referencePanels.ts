@@ -1,15 +1,17 @@
-// Drei Seiten hier:
-//  - "Türme" (aus dem 'tower-info'-Icon der Defense-Kauf-Leiste, siehe towerRender.ts) listet
-//    alle 8 Turmtypen mit Beschreibung + Kampf-Werten. Blockierendes Modal (main.ts towersInfoOpen).
-//  - Der Farb-Guide (drawColorGuideList()) fasst KURZ zusammen, woraus jede Farbe gemischt wird
-//    (für Tier 3/4 BEIDE Rezept-Varianten) UND welchen Kampfeffekt sie hat — ersetzt die beiden
-//    früheren Bild-Infoseiten (Assets/InfoColors.png/ColorEffects.png). Reine Inhalts-Zeichnung
-//    ohne eigenes Chrome/Blocking — lebt im festen Mittel-Feld (main.ts drawMiddleStrip()).
+// Drei Seiten hier, alle blockierende Modals mit derselben Chrome (drawPanelChrome()):
+//  - "Türme" (aus dem 'tower-info'-Icon der Kauf-Leiste, siehe towerRender.ts) listet alle 8
+//    Turmtypen mit Beschreibung + Kampf-Werten (main.ts towersInfoOpen).
+//  - Der Farb-Guide (drawColorGuidePanel(), Inhalt in drawColorGuideList()) fasst KURZ zusammen,
+//    woraus jede Farbe gemischt wird (für Tier 3/4 BEIDE Rezept-Varianten) UND welchen Kampfeffekt
+//    sie hat, aufgeteilt auf 2 Spalten (main.ts colorGuideOpen, aus dem 'color-guide'-Icon der
+//    Kauf-Leiste). Lebte früher als nicht-blockierendes Feld im festen Mittel-Streifen zwischen
+//    Economy/Defense — seit der Zusammenlegung auf EIN gemeinsames Raster gibt es diesen Streifen
+//    nicht mehr, daher jetzt ein Modal wie die übrigen beiden Seiten hier.
 //  - Das Willkommens-/Tutorial-Popup (drawWelcomePanel()) erscheint einmalig beim allerersten
-//    Start (siehe main.ts, per localStorage gemerkt). Blockierendes Modal wie "Türme".
+//    Start (siehe main.ts, per localStorage gemerkt).
 
 import { COLORS, readableTextColor } from '../constants/colors'
-import { getResource, RESOURCES } from '../data/resources'
+import { getResource, RESOURCES, type ResourceDefinition } from '../data/resources'
 import { COLOR_EFFECT_INFO } from '../towerdefense/ammoEffects'
 import { TOWER_DEFINITIONS } from '../towerdefense/towers'
 import { drawCircle, drawCircleOutline, drawHexagonOutline, drawTriangleOutline } from './shapes'
@@ -204,15 +206,21 @@ function drawRecipeIcon(ctx: CanvasRenderingContext2D, icon: RecipeEntry['icon']
   else drawHexagonOutline(ctx, x, cy, 3.6, COLORS.textMid, 1.2)
 }
 
-/** Kombinierter Farb-Guide fürs feste Mittel-Feld zwischen Economy und Defense (siehe main.ts
- * drawMiddleStrip()) — ersetzt die beiden früheren Bild-Infoseiten (siehe Datei-Kommentar oben).
- * Schmale, hohe Liste statt eines zentrierten Modals: EIN Eintrag je Farbe, für Tier 3/4 BEIDE
- * Rezept-Varianten (Dreieck UND Hexagon) übereinander — User-Vorgabe: "beide varianten für t3
- * und t4 farben sollen angezeigt werden". Reine Inhalts-Zeichnung ohne Hintergrund/Rahmen/Titel
- * (das übernimmt main.ts, da der Streifen dort layoutet wird) — `x`/`y`/`width`/`height`
- * begrenzen nur den verfügbaren Platz, es wird nicht gescrollt oder abgeschnitten. */
-export function drawColorGuideList(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number) {
-  const resources = RESOURCES.filter((r) => r.tier !== 'special')
+/** Inhalt des Farb-Guide — EIN Eintrag je Farbe, für Tier 3/4 BEIDE Rezept-Varianten (Dreieck UND
+ * Hexagon) übereinander (User-Vorgabe: "beide varianten für t3 und t4 farben sollen angezeigt
+ * werden"). Reine Inhalts-Zeichnung ohne Hintergrund/Rahmen/Titel (das übernimmt
+ * `drawColorGuidePanel()`) — `x`/`y`/`width`/`height` begrenzen nur den verfügbaren Platz, es wird
+ * nicht gescrollt oder abgeschnitten. `resourceList` lässt `drawColorGuidePanel()` die Farben auf
+ * 2 Spalten aufteilen (Default = alle Nicht-Spezial-Farben in einer einzigen Liste). */
+export function drawColorGuideList(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  resourceList: ResourceDefinition[] = RESOURCES.filter((r) => r.tier !== 'special'),
+) {
+  const resources = resourceList
   const lineHeight = 11
   const rowGap = 6
   let cursorY = y
@@ -273,17 +281,44 @@ export function drawColorGuideList(ctx: CanvasRenderingContext2D, x: number, y: 
   ctx.restore()
 }
 
+/** Farb-Guide als eigenes blockierendes Modal (User-Vorgabe seit der Zusammenlegung auf ein
+ * gemeinsames Raster: das feste Mittel-Feld zwischen Economy/Defense, in dem der Guide früher als
+ * nicht-blockierendes Feld lebte, gibt es nicht mehr — dieselbe Chrome wie `drawTowerReferencePanel()`,
+ * geöffnet über das neue "Colors"-Icon in der Kauf-Leiste, siehe towerRender.ts). Teilt die Farben
+ * auf 2 Spalten auf, damit die Liste in der Modal-Höhe Platz hat, statt in einer einzigen, sehr
+ * hohen Spalte zu laufen. */
+export function drawColorGuidePanel(ctx: CanvasRenderingContext2D, width: number, height: number) {
+  const bounds = drawPanelChrome(ctx, width, height, 'C O L O R   G U I D E')
+
+  const all = RESOURCES.filter((r) => r.tier !== 'special')
+  const mid = Math.ceil(all.length / 2)
+  const left = all.slice(0, mid)
+  const right = all.slice(mid)
+
+  const columnWidth = 340
+  const columnGap = 40
+  const startX = bounds.x + (bounds.width - (columnWidth * 2 + columnGap)) / 2
+  const contentY = bounds.y + 58
+  const contentHeight = bounds.height - 58 - 20
+
+  drawColorGuideList(ctx, startX, contentY, columnWidth, contentHeight, left)
+  drawColorGuideList(ctx, startX + columnWidth + columnGap, contentY, columnWidth, contentHeight, right)
+}
+
 const QUICK_START_STEPS: { title: string; body: string }[] = [
   { title: '1. Generate Light', body: 'Place Cyan, Magenta, and Yellow sources to create light beams.' },
   {
     title: '2. Mix Colors',
-    body: 'Use prisms to combine colors into stronger resources. Triangle prisms mix 2 colors, Hexagon prisms mix up to 5. Check the Color Guide (the ? between Economy and Defense) for what mixes into what.',
+    body: 'Use prisms to combine colors into stronger resources. Triangle prisms mix 2 colors, Hexagon prisms mix up to 5. Check the Color Guide (the icon in the build bar) for what mixes into what.',
   },
-  { title: '3. Store Resources', body: 'Route mixed light into containers to collect colors.' },
-  { title: '4. Build Towers', body: 'Choose a tower type and load it with a color to define its combat effect.' },
+  { title: '3. Build Towers', body: 'Choose a tower type and place it anywhere on the shared grid.' },
+  {
+    title: '4. Arm Your Towers',
+    body: 'Route a beam directly into a tower — whatever color reaches it becomes its ammo automatically. No picking, no storage: the wire IS the ammo, and a stronger beam (a higher-level generator, or a shorter route) arms it more reliably.',
+  },
   {
     title: '5. Defend',
-    body: 'Stop enemies before they reach the end. Combine tower types and color effects for powerful synergies. Use mirrors to redirect the enemy path.',
+    body: 'Stop enemies before they reach the end. Every building blocks their path, not just towers, so plan your layout carefully. Use mirrors to redirect the enemy path — and your light beams.',
   },
 ]
 

@@ -1,12 +1,12 @@
-// Rendering für die Licht-Wirtschaft (siehe economy/buildings.ts + lightSimulation.ts): die 4
-// Bautypen (Lichtquelle/Spiegel/Prisma/Container), ihre Kauf-Leiste, und die Lichtstrahlen
-// selbst. Reine Zeichenfunktionen, keine Simulation — siehe lightSimulation.ts dafür.
+// Rendering für die Licht-Wirtschaft (siehe economy/buildings.ts + lightSimulation.ts): die 3
+// Bautypen (Lichtquelle/Spiegel/Prisma), ihr Anteil an der kombinierten Kauf-Leiste, und die
+// Lichtstrahlen selbst. Reine Zeichenfunktionen, keine Simulation — siehe lightSimulation.ts dafür.
 
 import { COLORS, isColorDark } from '../constants/colors'
 import { getResource } from '../data/resources'
-import { GENERATOR_MAX_LEVEL, CONTAINER_MAX_LEVEL, type Container, type LightSource, type Mirror, type MirrorOrientation, type Prism } from '../economy/buildings'
+import { GENERATOR_MAX_LEVEL, type LightSource, type Mirror, type MirrorOrientation, type Prism } from '../economy/buildings'
 import type { BeamSegment, PrismStatus } from '../economy/lightSimulation'
-import { cellCenter, GRID_EXPAND_COST, type GridCoord, type HexDirection, type PlacementGrid } from '../grid/placementGrid'
+import { cellCenter, type GridCoord, type HexDirection, type PlacementGrid } from '../grid/placementGrid'
 import { drawCircle, drawCircleOutline, drawHexagon, drawHexagonOutline, drawTriangle, drawTriangleOutline, strokeRoundedPolyline } from './shapes'
 
 /** Pixel-Winkel (Grad) der 6 Hex-Richtungen — deckungsgleich mit den Nachbar-Deltas in
@@ -70,7 +70,6 @@ const UNCONFIGURED_COLOR = '#ffffff'
 const MIRROR_COLOR = '#eafffa'
 export const PRISM_SIMPLE_SIZE = 20
 export const PRISM_COMPLEX_SIZE = 24
-export const CONTAINER_SIZE = 18
 const PORT_DOT_RADIUS = 3.5
 const PORT_DOT_OFFSET = 15
 const OUTPUT_PORT_RADIUS = 5.5
@@ -79,10 +78,11 @@ const OUTPUT_PORT_RADIUS = 5.5
  * Ressourcen-Farbe des Gebäudes, damit sie auf JEDER Farbe klar erkennbar bleibt. */
 export const MAX_LEVEL_COLOR = '#ffd23f'
 
-/** Bautypen mit Leveln skalieren ihre sichtbare Größe linear zwischen diesem Mindest-Anteil der
- * Basisgröße (Level 1) und 100% (Max-Level, siehe SOURCE_OUTER_SIZE/PRISM_*_SIZE/CONTAINER_SIZE —
- * die bisherigen Konstanten bleiben unverändert die GRÖSSTE Größe). Untergrenze bewusst nicht zu
- * klein gewählt, damit ein Level-1-Gebäude weiterhin gut klickbar/lesbar bleibt. */
+/** Der Generator ist der einzige verbliebene Bautyp, der noch über ein Level skaliert (Prismen
+ * haben keins mehr, Container gibt es nicht mehr) — seine sichtbare Größe interpoliert linear
+ * zwischen diesem Mindest-Anteil der Basisgröße (Level 1) und 100% (Max-Level, siehe
+ * SOURCE_OUTER_SIZE — bleibt unverändert die GRÖSSTE Größe). Untergrenze bewusst nicht zu klein
+ * gewählt, damit ein Level-1-Generator weiterhin gut klickbar/lesbar bleibt. */
 const LEVEL_MIN_SIZE_SCALE = 0.55
 
 function levelSizeScale(level: number, maxLevel: number): number {
@@ -99,15 +99,9 @@ export function sourceOuterRadius(source: LightSource): number {
 export function prismSize(prism: Prism): number {
   return prism.prismKind === 'triangle' ? PRISM_SIMPLE_SIZE : PRISM_COMPLEX_SIZE
 }
-export function containerRadius(container: Container): number {
-  return CONTAINER_SIZE * levelSizeScale(container.level, CONTAINER_MAX_LEVEL)
-}
 
 export function isSourceMaxed(source: LightSource): boolean {
   return source.level >= GENERATOR_MAX_LEVEL
-}
-export function isContainerMaxed(container: Container): boolean {
-  return container.level >= CONTAINER_MAX_LEVEL
 }
 
 /** Hohler Außenring + gefüllter Innenkreis, der 1x/Sekunde pulsiert — identisch zum früheren Generator.
@@ -257,46 +251,6 @@ export function drawPrismEntity(ctx: CanvasRenderingContext2D, prism: Prism, cen
   }
 }
 
-/** Gefüllter Kreis (User-Vorgabe, ersetzt das frühere Sechseck) — gefüllt mit Tortenstücken in
- * den Farben, die er gerade einfängt (je gleich große Kreissektoren, an der Kreis-Kontur
- * geclippt), statt nur kleiner Farbpunkte daneben. */
-export function drawContainerEntity(ctx: CanvasRenderingContext2D, container: Container, center: { x: number; y: number }, receivedResourceIds: string[]) {
-  const active = receivedResourceIds.length > 0
-  const outlineColor = active ? COLORS.textBright : '#3a3f4a'
-  const size = containerRadius(container)
-
-  if (active) {
-    ctx.save()
-    ctx.beginPath()
-    ctx.arc(center.x, center.y, size, 0, Math.PI * 2)
-    ctx.clip()
-
-    const anglePerSlice = (Math.PI * 2) / receivedResourceIds.length
-    receivedResourceIds.forEach((resourceId, i) => {
-      const color = getResource(resourceId).color
-      ctx.fillStyle = color
-      ctx.shadowColor = color
-      ctx.shadowBlur = 10
-      ctx.beginPath()
-      ctx.moveTo(center.x, center.y)
-      ctx.arc(center.x, center.y, size * 1.5, -Math.PI / 2 + i * anglePerSlice, -Math.PI / 2 + (i + 1) * anglePerSlice)
-      ctx.closePath()
-      ctx.fill()
-    })
-    ctx.restore()
-  }
-
-  ctx.save()
-  ctx.strokeStyle = outlineColor
-  ctx.shadowColor = outlineColor
-  ctx.shadowBlur = active ? 14 : 4
-  ctx.lineWidth = 2
-  ctx.beginPath()
-  ctx.arc(center.x, center.y, size, 0, Math.PI * 2)
-  ctx.stroke()
-  ctx.restore()
-}
-
 /** Ein Lichtstrahl-Segment (Zellpfad -> Pixel-Punkte) als leuchtende Linie. */
 export function drawBeamSegment(ctx: CanvasRenderingContext2D, grid: PlacementGrid, segment: BeamSegment, alpha = 0.8) {
   const points = segment.cells.map((cell) => cellCenter(grid, cell))
@@ -351,9 +305,10 @@ export function drawBeamTraveler(ctx: CanvasRenderingContext2D, grid: PlacementG
   ctx.restore()
 }
 
-// --- Kauf-Leiste (oben im Economy-Feld) ---
+// --- Kauf-Leiste (Teil 1 der kombinierten Leiste oben — siehe towerRender.ts buildTowerPalette()
+// für Teil 2, main.ts reiht beide direkt aneinander in EINE gemeinsame Reihe) ---
 
-export type PaletteKind = 'source-cyan' | 'source-magenta' | 'source-yellow' | 'mirror' | 'prism-simple' | 'prism-complex' | 'container' | 'expand-grid'
+export type PaletteKind = 'source-cyan' | 'source-magenta' | 'source-yellow' | 'mirror' | 'prism-simple' | 'prism-complex'
 
 export interface PaletteItem {
   kind: PaletteKind
@@ -374,8 +329,6 @@ export function buildPalette(startX: number, y: number, gap: number): PaletteIte
     { kind: 'mirror', cost: 5, costResourceId: 'lumen' },
     { kind: 'prism-simple', cost: 25, costResourceId: 'lumen' },
     { kind: 'prism-complex', cost: 50, costResourceId: 'lumen' },
-    { kind: 'container', cost: 8, costResourceId: 'lumen' },
-    { kind: 'expand-grid', cost: GRID_EXPAND_COST, costResourceId: 'prisma' },
   ]
   return specs.map((spec, i) => ({ ...spec, x: startX + i * gap, y, radius: PALETTE_RADIUS }))
 }
@@ -405,10 +358,6 @@ export function paletteItemDescription(kind: PaletteKind): string {
       return 'Triangle Prism — mixes 2 named colors arriving at its corners into a new one'
     case 'prism-complex':
       return 'Hexagon Prism — mixes raw Cyan/Magenta/Yellow parts (or 3 named colors) into a new one'
-    case 'container':
-      return 'Container — stores rate from up to N different colors, based on its level'
-    case 'expand-grid':
-      return 'Expand the Economy grid by one row and column'
   }
 }
 
@@ -443,12 +392,6 @@ export function drawPaletteItem(ctx: CanvasRenderingContext2D, item: PaletteItem
       break
     case 'prism-complex':
       drawHexagon(ctx, item.x, item.y, item.radius, UNCONFIGURED_COLOR, 0, 8)
-      break
-    case 'container':
-      drawCircle(ctx, item.x, item.y, item.radius * 0.85, COLORS.textBright, 6)
-      break
-    case 'expand-grid':
-      drawHexagonOutline(ctx, item.x, item.y, item.radius, COLORS.gridLineStrong, 2)
       break
   }
 

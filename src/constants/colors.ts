@@ -21,9 +21,9 @@ export const COLORS = {
 } as const
 
 /** Für Text/Text-Icons, die sonst 1:1 in einer Ressourcenfarbe eingefärbt würden (siehe
- * render/referencePanels.ts, render/colorWheelPanel.ts): sehr dunkle Farben wie Black (#000000)
- * oder Blue (#0000FF) wären auf dem fast-schwarzen Panel-Hintergrund unlesbar — fällt dann auf
- * `textBright` zurück, sonst bleibt die Ressourcenfarbe erhalten. */
+ * render/referencePanels.ts): sehr dunkle Farben wie Black (#000000) oder Blue (#0000FF) wären
+ * auf dem fast-schwarzen Panel-Hintergrund unlesbar — fällt dann auf `textBright` zurück, sonst
+ * bleibt die Ressourcenfarbe erhalten. */
 function luminanceOf(hex: string): number {
   const r = parseInt(hex.slice(1, 3), 16)
   const g = parseInt(hex.slice(3, 5), 16)

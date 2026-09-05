@@ -1,5 +1,4 @@
 import { COLORS } from '../constants/colors'
-import { BUILDING_COSTS } from '../economy/buildings'
 import { getResource } from '../data/resources'
 import { GRID_EXPAND_COST } from '../grid/placementGrid'
 import { defaultTowerRotation, getTowerDefinition, TOWER_DEFINITIONS, type PlacedTower, type TowerKind } from '../towerdefense/towers'
@@ -53,9 +52,11 @@ export function drawTowerPreview(ctx: CanvasRenderingContext2D, kind: TowerKind,
   drawTowerShape(ctx, kind, center.x, center.y, TOWER_ICON_SIZE, color, defaultTowerRotation(kind))
 }
 
-// --- Turm-Kauf-/Erweiterungs-Leiste (oben im Defense-Feld) ---
+// --- Turm-Kauf-/Erweiterungs-Leiste (Teil 2 der kombinierten Leiste — siehe buildingRender.ts
+// buildPalette() für Teil 1, der den einzigen Spiegel-Eintrag stellt; main.ts reiht beide direkt
+// aneinander in EINE gemeinsame Reihe) ---
 
-export type TowerPaletteKind = TowerKind | 'mirror' | 'expand-grid' | 'tower-info'
+export type TowerPaletteKind = TowerKind | 'expand-grid' | 'tower-info' | 'color-guide'
 
 export interface TowerPaletteItem {
   kind: TowerPaletteKind
@@ -80,9 +81,9 @@ export function buildTowerPalette(startX: number, y: number, gap: number): Tower
     radius: PALETTE_RADIUS,
   }))
   const extraKinds: { kind: TowerPaletteKind; name: string; costResourceId: string; cost: number }[] = [
-    { kind: 'mirror', name: 'Mirror', cost: BUILDING_COSTS.mirror, costResourceId: 'lumen' },
     { kind: 'expand-grid', name: 'Grid', cost: GRID_EXPAND_COST, costResourceId: 'prisma' },
     { kind: 'tower-info', name: 'Towers', cost: 0, costResourceId: 'lumen' },
+    { kind: 'color-guide', name: 'Colors', cost: 0, costResourceId: 'lumen' },
   ]
   const extraItems: TowerPaletteItem[] = extraKinds.map((item, i) => ({
     ...item,
@@ -101,12 +102,12 @@ export function hitTestTowerPalette(items: TowerPaletteItem[], x: number, y: num
  * für Turm- UND Info-Icons. Turmtypen nutzen ihre eigene TOWER_DEFINITIONS-Beschreibung. */
 export function towerPaletteItemDescription(kind: TowerPaletteKind): string {
   switch (kind) {
-    case 'mirror':
-      return 'Mirror — redirects the enemy path without changing it otherwise'
     case 'expand-grid':
-      return 'Expand the Defense grid by one row and column'
+      return 'Expand the grid by one row and column'
     case 'tower-info':
       return 'Towers — shows every tower type with its stats'
+    case 'color-guide':
+      return 'Color Guide — shows every color, how to mix it, and its combat effect'
     default:
       return getTowerDefinition(kind).description
   }
@@ -121,29 +122,22 @@ function drawTowerInfoIcon(ctx: CanvasRenderingContext2D, x: number, y: number, 
   drawCircle(ctx, x, y - radius * 0.4, radius * 0.26, COLORS.textDim, 0)
 }
 
-/** Kleine diagonale Linie — dasselbe Icon-Muster wie der Spiegel in der Economy-Kauf-Leiste
- * (siehe buildingRender.ts), da es exakt derselbe Bautyp ist (nur auf dem Defense-Raster). */
-function drawMirrorPaletteIcon(ctx: CanvasRenderingContext2D, x: number, y: number, radius: number) {
-  const half = radius * 0.7
-  const angle = (Math.PI / 180) * -30
-  const dx = half * Math.cos(angle)
-  const dy = half * Math.sin(angle)
-  ctx.strokeStyle = '#eafffa'
-  ctx.lineWidth = 2.5
-  ctx.lineCap = 'round'
-  ctx.beginPath()
-  ctx.moveTo(x - dx, y - dy)
-  ctx.lineTo(x + dx, y + dy)
-  ctx.stroke()
+/** Kleine "3 Farbpunkte"-Miniatur fürs Color-Guide-Icon: deutet an, dass dahinter eine
+ * Übersicht ALLER Farben steckt, statt für eine bestimmte Farbe zu stehen. */
+function drawColorGuideIcon(ctx: CanvasRenderingContext2D, x: number, y: number, radius: number) {
+  drawCircleOutline(ctx, x, y, radius, COLORS.textBright, 1.5, 6)
+  drawCircle(ctx, x, y - radius * 0.35, radius * 0.24, '#00FFFF', 0)
+  drawCircle(ctx, x - radius * 0.35, y + radius * 0.25, radius * 0.24, '#FF00FF', 0)
+  drawCircle(ctx, x + radius * 0.35, y + radius * 0.25, radius * 0.24, '#FFFF00', 0)
 }
 
 export function drawTowerPaletteItem(ctx: CanvasRenderingContext2D, item: TowerPaletteItem, affordable: boolean) {
   ctx.save()
   ctx.globalAlpha = affordable ? 1 : 0.35
 
-  if (item.kind === 'mirror') drawMirrorPaletteIcon(ctx, item.x, item.y, item.radius)
-  else if (item.kind === 'expand-grid') drawHexagonOutline(ctx, item.x, item.y, item.radius, COLORS.gridLineStrong, 2)
+  if (item.kind === 'expand-grid') drawHexagonOutline(ctx, item.x, item.y, item.radius, COLORS.gridLineStrong, 2)
   else if (item.kind === 'tower-info') drawTowerInfoIcon(ctx, item.x, item.y, item.radius)
+  else if (item.kind === 'color-guide') drawColorGuideIcon(ctx, item.x, item.y, item.radius)
   else drawTowerShape(ctx, item.kind, item.x, item.y, item.radius, TOWER_UNSELECTED_COLOR, defaultTowerRotation(item.kind))
 
   ctx.textAlign = 'center'
@@ -154,6 +148,10 @@ export function drawTowerPaletteItem(ctx: CanvasRenderingContext2D, item: TowerP
     ctx.fillStyle = COLORS.textDim
     ctx.font = '10px monospace'
     ctx.fillText('INFO', item.x, item.y + item.radius + 26)
+  } else if (item.kind === 'color-guide') {
+    ctx.fillStyle = COLORS.textDim
+    ctx.font = '10px monospace'
+    ctx.fillText('GUIDE', item.x, item.y + item.radius + 26)
   } else {
     ctx.fillStyle = getResource(item.costResourceId).color
     ctx.font = '10px monospace'

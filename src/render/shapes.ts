@@ -177,8 +177,9 @@ export function drawHexagon(
   })
 }
 
-/** Nur Outline statt Füllung — z. B. fürs Dreieck-Prisma-Icon auf der "Farbmischung"-Infoseite
- * (siehe render/colorWheelPanel.ts), das dort als hohles Symbol statt als echtes Bauteil dient. */
+/** Nur Outline statt Füllung — z. B. fürs kleine Dreieck-Rezept-Symbol im Farb-Guide (siehe
+ * render/referencePanels.ts drawRecipeIcon()), das dort als hohles Symbol statt als echtes
+ * Bauteil dient. */
 export function drawTriangleOutline(
   ctx: CanvasRenderingContext2D,
   x: number,

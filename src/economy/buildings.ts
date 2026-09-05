@@ -9,8 +9,10 @@
 // seit dieser Runde — vorher alle 6 Richtungen gleichzeitig), per Klick drehbar wie ein Spiegel
 // (`rotatePrism()`). Diese Ausgabe DARF (seit Farbsystem V2) auch in ein weiteres Prisma
 // eingespeist werden, um so die Tier-Kette 1->2->3->4->5 aufzubauen (siehe data/resources.ts,
-// triangleRecipe). Container fangen ankommendes Licht ein und wandeln es in Ressourcen-Rate um.
-// Strahlen kollidieren jetzt (User-Vorgabe): zwei Strahlen, die sich dieselbe freie Rasterzelle
+// triangleRecipe). Türme (siehe towerdefense/towers.ts) fangen ankommendes Licht als Munition
+// ein — kein separater "Container"-Bautyp mehr (User-Vorgabe, entfernt: Strahlen müssen jetzt in
+// einem Turm enden, um dessen Farbe zu liefern, statt in einen globalen Ratenpool). Strahlen
+// kollidieren jetzt (User-Vorgabe): zwei Strahlen, die sich dieselbe freie Rasterzelle
 // streitig machen, stoppen aneinander (siehe lightSimulation.ts). Die eigentliche Simulation
 // (Strahlverlauf, Reflexion, Kollision, Rezept-Abgleich, mehrstufige Ketten-Auflösung) lebt in
 // lightSimulation.ts — diese Datei ist nur das Datenmodell.
@@ -33,7 +35,7 @@ export interface LightSource {
   level: number
   /** Wie viele Zellen der Strahl maximal zurücklegt (inkl. Zellen mit Spiegeln), aus `level`
    * abgeleitet — bestimmt zugleich die "Stärke" (siehe lightSimulation.ts), mit der der Strahl an
-   * einem Container oder Prisma ankommt: Stärke = wie viele Zellen er von dort aus noch könnte. */
+   * einem Turm oder Prisma ankommt: Stärke = wie viele Zellen er von dort aus noch könnte. */
   range: number
 }
 
@@ -91,22 +93,7 @@ export interface Prism {
   outputDirection: HexDirection
 }
 
-/** 6 Level (User-Vorgabe, EIN Level mehr als die übrigen Bautypen): wie viele UNTERSCHIEDLICHE
- * Farben der Container gleichzeitig annimmt — die erste Farbe, die eine noch freie "Kapazitäts-
- * Zelle" belegt, gewinnt (siehe lightSimulation.ts `addContainerRate()`). */
-export const CONTAINER_CAPACITY_BY_LEVEL = [1, 2, 3, 4, 5, 6] as const
-export const CONTAINER_MAX_LEVEL = CONTAINER_CAPACITY_BY_LEVEL.length
-
-export interface Container {
-  id: string
-  kind: 'container'
-  col: number
-  row: number
-  /** 1-6, siehe CONTAINER_CAPACITY_BY_LEVEL. */
-  level: number
-}
-
-export type EconomyBuilding = LightSource | Mirror | Prism | Container
+export type EconomyBuilding = LightSource | Mirror | Prism
 
 /** Baukosten in Lumen (Raster-Erweiterung weiterhin in Prisma) — Platzhalter-Werte. */
 export const BUILDING_COSTS = {
@@ -114,16 +101,12 @@ export const BUILDING_COSTS = {
   mirror: 5,
   prismSimple: 25,
   prismComplex: 50,
-  container: 8,
 } as const
 
 /** Level-Up-Kosten in Lumen (Platzhalter-Werte, wie BUILDING_COSTS noch nicht ausbalanciert):
  * steigt linear mit dem ZIEL-Level, damit spätere Level spürbar teurer werden. */
 export function generatorUpgradeCost(targetLevel: number): number {
   return BUILDING_COSTS.source * targetLevel
-}
-export function containerUpgradeCost(targetLevel: number): number {
-  return BUILDING_COSTS.container * targetLevel
 }
 
 let idCounter = 0
@@ -152,21 +135,12 @@ export function createPrism(col: number, row: number, prismKind: PrismKind): Pri
   }
 }
 
-export function createContainer(col: number, row: number): Container {
-  return { id: nextId('container'), kind: 'container', col, row, level: 1 }
-}
-
-/** Erhöht das Level um 1 (bis zum jeweiligen Maximum) und rechnet die abgeleiteten Felder neu —
- * siehe GENERATOR_RANGE_BY_LEVEL / CONTAINER_CAPACITY_BY_LEVEL. */
+/** Erhöht das Level um 1 (bis zum Maximum) und rechnet die abgeleiteten Felder neu — siehe
+ * GENERATOR_RANGE_BY_LEVEL. */
 export function upgradeLightSource(source: LightSource) {
   if (source.level >= GENERATOR_MAX_LEVEL) return
   source.level += 1
   source.range = GENERATOR_RANGE_BY_LEVEL[source.level - 1]
-}
-
-export function upgradeContainer(container: Container) {
-  if (container.level >= CONTAINER_MAX_LEVEL) return
-  container.level += 1
 }
 
 /**
