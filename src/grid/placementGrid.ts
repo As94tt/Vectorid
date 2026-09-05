@@ -64,10 +64,6 @@ export function hexNeighbor(cell: GridCoord, direction: HexDirection): GridCoord
   return { col: cell.col + delta.dc, row: cell.row + delta.dr }
 }
 
-export function hexNeighbors(cell: GridCoord): GridCoord[] {
-  return ([0, 1, 2, 3, 4, 5] as HexDirection[]).map((direction) => hexNeighbor(cell, direction))
-}
-
 const SQRT3 = Math.sqrt(3)
 
 /** Pixel-Breite einer Spalte (horizontaler Mittelpunktsabstand zweier Felder derselben Zeile). */

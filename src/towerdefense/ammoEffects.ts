@@ -1,9 +1,9 @@
 // Farb-Effekte — jede der 14 Kampf-Farben (Tier 1-5, siehe data/resources.ts) hat ihren EIGENEN,
 // festen Effekt, der bei einem Treffer direkt angewendet wird — siehe applyAmmoEffect() als
-// zentraler Dispatch, aufgerufen aus towerdefense/combat.ts' treatHit(). Exakt nach der
-// Referenztabelle Assets/ColorEffects.png ("What Each Color Does", wird 1:1 als Bild angezeigt,
-// siehe render/infoImagePanel.ts). Alle Stack-Felder/Konstanten leben in enemies.ts
-// (Datenmodell), diese Datei enthält nur die Anwendungs-LOGIK je Farbe.
+// zentraler Dispatch, aufgerufen aus towerdefense/combat.ts' treatHit(). Kurzbeschreibungen je
+// Farbe (siehe COLOR_EFFECT_INFO unten) stehen im Farb-Guide (render/referencePanels.ts
+// drawColorGuideList()). Alle Stack-Felder/Konstanten leben in enemies.ts (Datenmodell), diese
+// Datei enthält nur die Anwendungs-LOGIK je Farbe.
 //
 //   Turmform -> bestimmt, wie Treffer verteilt werden (siehe combat.ts)
 //   Munition -> bestimmt hier, WELCHER Farb-Effekt beim Treffer ausgelöst wird
@@ -184,9 +184,10 @@ function applyWhite(target: Enemy) {
 }
 
 /**
- * Zentraler Dispatch: wendet den zur zugewiesenen Munition gehörenden Farb-Effekt an (siehe
- * Assets/ColorEffects.png). Ohne zugewiesene Munition (resourceId null) oder bei Ressourcen ohne
- * eigenen Effekt (Lumen/Prisma) passiert nichts.
+ * Zentraler Dispatch: wendet den zur zugewiesenen Munition gehörenden Farb-Effekt an. Ohne
+ * zugewiesene Munition (resourceId null) oder bei Ressourcen ohne eigenen Effekt (Lumen/Prisma —
+ * die inzwischen ohnehin nicht mehr als Munition wählbar sind, siehe colorWheelPanel.ts
+ * AMMO_RESOURCES) passiert nichts.
  */
 export function applyAmmoEffect(resourceId: string | null, damage: number, target: Enemy, allEnemies: Enemy[], pathPixels: Point[], elapsedSeconds: number) {
   switch (resourceId) {
@@ -235,8 +236,8 @@ export function applyAmmoEffect(resourceId: string | null, damage: number, targe
   }
 }
 
-/** Kurzbeschreibungen für die kombinierte Hilfeseite (siehe render/referencePanels.ts
- * drawColorGuidePanel()) — 1:1 aus Assets/ColorEffects.png destilliert, eine knappe Zeile je Farbe. */
+/** Kurzbeschreibungen für den Farb-Guide (siehe render/referencePanels.ts drawColorGuideList()) —
+ * eine knappe Zeile je Farbe, muss inhaltlich zu den apply*()-Funktionen oben passen. */
 export const COLOR_EFFECT_INFO: Record<string, { name: string; description: string }> = {
   cyan: { name: 'Minor Slow', description: 'Slightly slows the target.' },
   magenta: { name: 'Bonus Damage', description: 'Extra direct damage per hit.' },

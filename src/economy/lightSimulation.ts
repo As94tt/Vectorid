@@ -6,7 +6,7 @@
 //
 // Farbsystem V2 (User-Vorgabe): Prismen dürfen ihre Ausgabefarbe jetzt in ein WEITERES Prisma
 // einspeisen (keine Rekursions-Sperre mehr, siehe data/resources.ts) — dadurch entsteht die
-// Tier-Kette 1->2->3->4->5 (z. B. Teal = Blue + Green, beides selbst Prisma-Ausgaben). Da die
+// Tier-Kette 1->2->3->4->5 (z. B. Cerulean = Blue + Green, beides selbst Prisma-Ausgaben). Da die
 // endgültige Ausgabefarbe eines Prismas von der (evtl. erst in einem SPÄTEREN Prisma
 // aufgelösten) Ausgabefarbe eines VORGESCHALTETEN Prismas abhängen kann, wird die komplette
 // Strahlverfolgung + Rezept-Auflösung mehrfach hintereinander durchlaufen (Fixpunkt-Iteration):
@@ -16,7 +16,7 @@
 // WICHTIG: Ein einmal aufgelöstes Prisma wird NIE wieder neu bewertet (monotone Sperre), sobald
 // es einen Treffer hat. Grund: ein Prisma strahlt seine Ausgabe in seine eine Output-Richtung ab
 // — steht es direkt neben einem seiner EIGENEN Eingangs-Prismen (der übliche Aufbau für eine
-// Tier-Kette, z. B. Teal direkt neben Blue+Green) und ist zufällig genau darauf ausgerichtet,
+// Tier-Kette, z. B. Cerulean direkt neben Blue+Green) und ist zufällig genau darauf ausgerichtet,
 // könnte sein Ausgabestrahl in einem SPÄTEREN Durchlauf dessen exaktes Eingangs-Set verfälschen
 // (ein 3. Farbsignal killt z. B. den 2-Teile-Treffer von Blue) — ohne Sperre könnte die Auflösung
 // dadurch endlos zwischen "aufgelöst"/"nicht aufgelöst" oszillieren, statt sich einzupendeln. Ein

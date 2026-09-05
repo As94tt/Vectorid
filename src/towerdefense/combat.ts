@@ -361,7 +361,7 @@ export function updateProjectiles(
 
       if (proj.splashRadius) {
         for (const other of enemies) {
-          if (other.id === target.id) continue
+          if (other.id === target.id || other.hp <= 0) continue
           const otherPos = getPointAtProgress(pathPixels, other.progress)
           if (Math.hypot(otherPos.x - targetPos.x, otherPos.y - targetPos.y) <= proj.splashRadius) {
             treatHit(other, proj.damage * SPLASH_DAMAGE_FACTOR, proj.resourceId, enemies, pathPixels, elapsedSeconds, proj.towerKind, damageByLoadout)

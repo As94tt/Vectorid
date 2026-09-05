@@ -17,7 +17,7 @@
 
 export type ResourceTier = 1 | 2 | 3 | 4 | 5 | 'special'
 
-/** Rezept in CMY-"Teilen" (z. B. Teal = 2C+1M+1Y) — keine Anteile, die sich zu 1 summieren. */
+/** Rezept in CMY-"Teilen" (z. B. Cerulean = 2C+1M+1Y) — keine Anteile, die sich zu 1 summieren. */
 export interface CmyParts {
   c: number
   m: number
@@ -100,8 +100,4 @@ export function getResource(id: string): ResourceDefinition {
   const found = RESOURCES.find((r) => r.id === id)
   if (!found) throw new Error(`Unknown resource: ${id}`)
   return found
-}
-
-export function getResourcesByTier(tier: ResourceTier): ResourceDefinition[] {
-  return RESOURCES.filter((r) => r.tier === tier)
 }

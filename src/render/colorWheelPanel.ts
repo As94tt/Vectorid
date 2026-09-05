@@ -3,10 +3,10 @@ import { RESOURCES, type ResourceDefinition } from '../data/resources'
 import { drawCircle, drawCircleOutline } from './shapes'
 
 // Munitions-Auswahl fürs Farbwheel-Panel (Klick auf die "Ammo"-Zeile eines Turms, siehe main.ts
-// wheelMode==='ammo') — bewusst KEIN Rezept-Diagramm mehr (das steckt jetzt 1:1 im Referenzbild
-// Assets/InfoColors.png, siehe render/infoImagePanel.ts), sondern eine einfache, flache Übersicht
-// aller Farben mit ihrer AKTUELLEN Produktionsrate — User-Vorgabe: "just an overview of all
-// colors including the current production rate".
+// wheelMode==='ammo') — bewusst KEIN Rezept-Diagramm (das steht stattdessen im Farb-Guide, siehe
+// render/referencePanels.ts drawColorGuideList()), sondern eine einfache, flache Übersicht aller
+// Farben mit ihrer AKTUELLEN Produktionsrate — User-Vorgabe: "just an overview of all colors
+// including the current production rate".
 
 export interface WheelSwatch {
   resource: ResourceDefinition
@@ -44,6 +44,12 @@ export function hitTestWheelSwatch(swatches: WheelSwatch[], x: number, y: number
   return swatches.find((s) => Math.hypot(s.x - x, s.y - y) <= s.radius + 6) ?? null
 }
 
+/** Munition kommt nur aus Farben, die die Wirtschaft tatsächlich produziert — Lumen/Prisma sind
+ * Kampf-Belohnungen ohne laufende Produktionsrate (siehe data/resources.ts) und würden, als
+ * Munition zugewiesen, einen Turm dauerhaft "ohne Munition" (und damit permanent feuerlos)
+ * stehen lassen, ohne dass das für den Spieler ersichtlich wäre. */
+const AMMO_RESOURCES = RESOURCES.filter((r) => r.tier !== 'special')
+
 export function buildWheelLayout(width: number, height: number): WheelSwatch[] {
   const bounds = panelBounds(width, height)
   const padding = 20
@@ -51,11 +57,11 @@ export function buildWheelLayout(width: number, height: number): WheelSwatch[] {
   const contentY = bounds.y + 60
   const contentW = bounds.width - padding * 2
   const contentH = bounds.height - 60 - padding
-  const rows = Math.ceil(RESOURCES.length / COLS)
+  const rows = Math.ceil(AMMO_RESOURCES.length / COLS)
   const cellW = contentW / COLS
   const cellH = contentH / rows
 
-  return RESOURCES.map((resource, i) => {
+  return AMMO_RESOURCES.map((resource, i) => {
     const col = i % COLS
     const row = Math.floor(i / COLS)
     return {

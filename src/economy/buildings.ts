@@ -60,7 +60,7 @@ export interface Mirror {
 /** Dreieck = mischt aus 2 fest benannten ANDEREN Farben (resources.ts: triangleRecipe) — die
  * Eingangsfarben dürfen selbst wieder gemischte Farben sein, dadurch entsteht die Tier-Kette
  * 1->2->3->4->5. Nur an 2 der 6 Rasterrichtungen (den beiden Ecken neben dem Output) nimmt es
- * überhaupt Eingänge an (siehe lightSimulation.ts `isTriangleInputSide()`). Hexagon (ersetzt das
+ * überhaupt Eingänge an (siehe lightSimulation.ts `isTriangleCorner()`). Hexagon (ersetzt das
  * frühere Fünfeck) = mischt direkt aus roher Cyan/Magenta/Yellow-Teile-Summe ODER einem exakten
  * Set fest benannter Farben (resources.ts: hexagonRecipe/hexagonNamedRecipe), überspringt dabei
  * ggf. alle Zwischenfarben, und nimmt (unverändert) an allen 5 Nicht-Output-Richtungen Eingänge

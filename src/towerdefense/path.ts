@@ -10,10 +10,6 @@ export interface Point {
   y: number
 }
 
-export function createEnemyPath(points: Point[]): Point[] {
-  return points
-}
-
 function segmentLengths(path: Point[]) {
   const lengths: number[] = []
   for (let i = 0; i < path.length - 1; i++) {

@@ -9,8 +9,6 @@ export const COLORS = {
   gridLineStrong: 'rgba(0, 255, 213, 0.18)',
 
   base: '#b026ff', // Spielerbasis / Kern — eigenständiges Landmark, kein Ressourcen-Tier
-  // Achtung: nicht zu verwechseln mit der Lvl-2-Ressource "Purple" (#800080) in resources.ts —
-  // gleicher Name, andere Bedeutung (Landmark-Farbe vs. Wirtschafts-Ressource).
   enemy: '#ff2daa', // generische Gegner-Kennfarbe, unabhängig vom Ressourcen-Wheel
   buildEmpty: 'rgba(0, 255, 213, 0.25)', // leerer Bauplatz (Outline)
 
@@ -21,8 +19,6 @@ export const COLORS = {
   textMid: '#c7c7d1',
   textBright: '#eafffa',
 } as const
-
-export type ColorToken = (typeof COLORS)[keyof typeof COLORS]
 
 /** Für Text/Text-Icons, die sonst 1:1 in einer Ressourcenfarbe eingefärbt würden (siehe
  * render/referencePanels.ts, render/colorWheelPanel.ts): sehr dunkle Farben wie Black (#000000)

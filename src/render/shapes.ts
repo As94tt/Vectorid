@@ -214,22 +214,6 @@ export function drawHexagonOutline(
   ctx.restore()
 }
 
-/** Nur Outline statt Füllung — z. B. für leere Bauplätze im Economy-Grid. */
-export function drawSquareOutline(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  size: number,
-  color: string,
-  lineWidth = 1.5,
-) {
-  ctx.save()
-  ctx.strokeStyle = color
-  ctx.lineWidth = lineWidth
-  ctx.strokeRect(x - size, y - size, size * 2, size * 2)
-  ctx.restore()
-}
-
 /** Halbkreis/Arc, z. B. für den Flamethrower-Turm. `rotation` zeigt die Richtung der Wölbung. */
 export function drawHalfCircle(
   ctx: CanvasRenderingContext2D,

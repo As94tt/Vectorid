@@ -1,6 +1,6 @@
-// Drei getrennte Ticks pro Frame (siehe CLAUDE.md): Economy (Idle-/Ressourcenproduktion),
-// Combat (Wellen/Gegner/Türme) und Render. Aktuell sind Economy/Combat noch Platzhalter —
-// die Trennung existiert von Anfang an, damit später niemand die Logik ins Render-Loop mischt.
+// Drei getrennte Ticks pro Frame (siehe CLAUDE.md): Economy (Licht-Simulation/Ressourcenproduktion,
+// siehe main.ts economyTick()), Combat (Wellen/Gegner/Türme, siehe combatTick()) und Render. Die
+// Trennung existiert von Anfang an, damit die Logik nicht ins Render-Loop einsickert.
 
 export interface Ticker {
   economyTick(dt: number): void

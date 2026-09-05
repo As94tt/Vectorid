@@ -4,8 +4,8 @@
 //
 // Kern-Mechanik: JEDE der 14 Kampf-Farben (Tier 1-5, Lumen/Prisma ausgenommen) hat ihren EIGENEN,
 // festen Effekt, der bei einem Treffer direkt angewendet wird (siehe ammoEffects.ts für die
-// Anwendungs-Logik je Farbe, exakt nach den Referenzbildern Assets/ColorEffects.png). Die meisten
-// Effekte sammeln dafür Stacks auf dem Gegner, die hier als Felder + Verfalls-/Tick-Logik leben.
+// Anwendungs-Logik je Farbe). Die meisten Effekte sammeln dafür Stacks auf dem Gegner, die hier
+// als Felder + Verfalls-/Tick-Logik leben.
 //
 // Alle konkreten Zahlenwerte (max. DPS, Slow-Stärke, Radien, Bonusschaden, ...) sind — wie überall
 // in diesem Projekt — Platzhalter-Balancing.
@@ -163,9 +163,9 @@ export function speedFactor(enemy: Enemy, elapsedSeconds: number): number {
 }
 
 /** Wendet Schaden an — gemindert durch Rüstung, verstärkt durch Violets Vulnerability (gilt für
- * ALLE Schadensquellen, siehe ColorEffects.png: "Increases damage taken"). Gibt den tatsächlich
- * abgezogenen Schaden zurück (nach Rüstung/Vulnerability) — braucht z. B. combat.ts, um den
- * Schaden je Turm-Konfiguration korrekt zu summieren (siehe dort `treatHit()`). */
+ * ALLE Schadensquellen, nicht nur Treffer mit Violet-Munition). Gibt den tatsächlich abgezogenen
+ * Schaden zurück (nach Rüstung/Vulnerability) — braucht z. B. combat.ts, um den Schaden je
+ * Turm-Konfiguration korrekt zu summieren (siehe dort `treatHit()`). */
 export function dealDamage(enemy: Enemy, rawDamage: number): number {
   const vulnerability = 1 + (enemy.violetStacks / VIOLET_STACK_MAX) * VIOLET_MAX_VULNERABILITY
   const actualDamage = rawDamage * (1 - enemy.armor) * vulnerability

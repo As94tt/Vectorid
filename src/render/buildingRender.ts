@@ -150,7 +150,7 @@ export function drawMirrorEntity(ctx: CanvasRenderingContext2D, mirror: Mirror, 
 
 /** Kleine Anschluss-Punkte an den Rasterkanten der Zelle — beim Hexagon-Prisma alle 6 Richtungen
  * außer der dedizierten Output-Richtung (unverändert), beim Dreieck-Prisma NUR die 3 eckengenauen
- * Richtungen (`onlyDirections`, siehe lightSimulation.ts `isTriangleInputSide()`) — die 3
+ * Richtungen (`onlyDirections`, siehe lightSimulation.ts `isTriangleCorner()`) — die 3
  * "Seiten"-Richtungen bekommen gar keinen Punkt, weil dort ohnehin nie ein Eingang möglich ist.
  * Gefüllt in der Farbe eines gerade ankommenden Strahls, sonst hohl/grau ("fehlender Input"
  * bleibt sichtbar). */
