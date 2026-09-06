@@ -14,8 +14,13 @@
 export const TIER2_STACK_MAX = 10
 export const STACK_DECAY_PER_SECOND = 1
 
-export const RED_BURN_MAX_DPS = 5 // bei TIER2_STACK_MAX Stacks
-export const GREEN_POISON_MAX_DPS = 6 // bei TIER2_STACK_MAX Stacks
+// User-Vorgabe (Balance): Burn/Poison-Schaden richtet sich NICHT mehr nach dem Turm-Schaden (der
+// bei einem Treffer sowieso nur die Stacks aufbaut, siehe applyRed()/applyGreen() in
+// ammoEffects.ts — die erhielten nie einen `damage`-Parameter), sondern nach einem Bruchteil der
+// MAXIMALEN Lebenspunkte des Ziels selbst, pro Sekunde bei TIER2_STACK_MAX Stacks — skaliert damit
+// automatisch mit zäheren Gegnern (v. a. Bossen) statt einer für alle gleichen Fixmenge.
+export const RED_BURN_MAX_HP_FRACTION_PER_SECOND = 0.05 // 5% der max. HP/Sekunde bei TIER2_STACK_MAX Stacks
+export const GREEN_POISON_MAX_HP_FRACTION_PER_SECOND = 0.06 // 6% der max. HP/Sekunde bei TIER2_STACK_MAX Stacks
 
 /** Cerulean (Freeze): 0-30, kein Verfall vor Auslösung, danach zurückgesetzt. */
 export const CERULEAN_STACK_MAX = 30
@@ -26,9 +31,12 @@ export const VIOLET_STACK_MAX = 100
 export const VIOLET_MAX_VULNERABILITY = 0.1 // +10% erlittener Schaden bei VIOLET_STACK_MAX Stacks
 
 /** Chartreuse (Stack Spread): kein eigener Stack-Pool — spreadet stattdessen bis zu
- * CHARTREUSE_SPREAD_FRACTION der VORHANDENEN Cerulean-/Violet-Stacks (Tier 3) des Ziels auf
- * Gegner in der Nähe. Spread-Kopien dürfen nicht noch einmal weiterverbreitet werden (siehe
- * `tier3SpreadBlock`), das verhindert eine Kettenreaktion. */
+ * CHARTREUSE_SPREAD_FRACTION der VORHANDENEN Tier-2- (Blue/Red/Green) UND Tier-3- (Cerulean/
+ * Violet) Stacks des Ziels auf Gegner in der Nähe (User-Vorgabe: vorher nur Tier 3) — REFRESHT sie
+ * dort dabei (hebt sie auf mindestens den Spread-Betrag an, verringert sie aber nie, siehe
+ * applyChartreuse() in ammoEffects.ts), statt sie nur draufzuaddieren. Spread-Kopien dürfen nicht
+ * noch einmal weiterverbreitet werden (siehe `chartreuseSpreadBlock`), das verhindert eine
+ * Kettenreaktion. */
 export const CHARTREUSE_SPREAD_RADIUS = 70
 export const CHARTREUSE_SPREAD_FRACTION = 0.5
 
@@ -38,9 +46,13 @@ export const CHARTREUSE_SPREAD_FRACTION = 0.5
 export const AQUAMARINE_PULL_RADIUS = 70
 export const AQUAMARINE_PULL_STRENGTH = 0.12 // Anteil des Fortschritts-Abstands, der pro Treffer aufgeholt wird
 
-/** Fuchsia (Scaling Chain Lightning): 0-100, permanent — mehr Stacks = mehr Sprünge. */
+/** Fuchsia (Scaling Chain Lightning): 0-100, permanent — mehr Stacks = mehr Sprünge UND mehr
+ * Schaden pro Sprung (User-Vorgabe: "increased stacks mean increased targets & increased damage")
+ * — bei FUCHSIA_STACK_MAX Stacks springt es auf FUCHSIA_MAX_JUMPS Ziele, jeweils mit
+ * FUCHSIA_MAX_DAMAGE_MULTIPLIER-fachem Schaden statt nur dem rohen Treffer-Schaden. */
 export const FUCHSIA_STACK_MAX = 100
 export const FUCHSIA_MAX_JUMPS = 10 // bei FUCHSIA_STACK_MAX Stacks
+export const FUCHSIA_MAX_DAMAGE_MULTIPLIER = 2 // bei FUCHSIA_STACK_MAX Stacks
 export const CHAIN_LIGHTNING_RADIUS = 70
 
 /** Amber (Explosion): 0-30, kein Verfall vor Auslösung, danach zurückgesetzt. */
@@ -65,7 +77,7 @@ export const BLACK_THRESHOLD_PER_STACK = 0.001 // 0.1 Prozentpunkte als Bruchtei
  * eigener Stack-Pool, kein Verfall, wirkt instant bei Treffer. */
 export const WHITE_PURGE_FRACTION_PER_POOL = 0.05 // % max. HP pro voll gefülltem, verzehrtem Stack-Pool
 
-export type Tier3StackKey = 'cerulean' | 'violet'
+export type ChartreuseSpreadKey = 'blue' | 'red' | 'green' | 'cerulean' | 'violet'
 
 export interface Enemy {
   id: string
@@ -99,9 +111,9 @@ export interface Enemy {
   ceruleanStacks: number // 0-30, Freeze-Trigger
   frozenUntil: number
   violetStacks: number // 0-100, permanent (Vulnerability)
-  /** Welche Tier-3-Stack-Typen dieser Gegner per Chartreuse-Spread EMPFANGEN hat — die dürfen
-   * nicht noch einmal weiterverbreitet werden (verhindert eine Kettenreaktion). */
-  tier3SpreadBlock: Set<Tier3StackKey>
+  /** Welche Tier-2-/Tier-3-Stack-Typen dieser Gegner per Chartreuse-Spread EMPFANGEN hat — die
+   * dürfen nicht noch einmal weiterverbreitet werden (verhindert eine Kettenreaktion). */
+  chartreuseSpreadBlock: Set<ChartreuseSpreadKey>
 
   // Tier 4
   fuchsiaStacks: number // 0-100, permanent (Scaling Chain Lightning)
@@ -143,7 +155,7 @@ export function createEnemy(options: CreateEnemyOptions = {}): Enemy {
     ceruleanStacks: 0,
     frozenUntil: 0,
     violetStacks: 0,
-    tier3SpreadBlock: new Set(),
+    chartreuseSpreadBlock: new Set(),
     fuchsiaStacks: 0,
     amberStacks: 0,
     blackStacks: 0,
@@ -188,8 +200,8 @@ export function tickEnemy(enemy: Enemy, dt: number, elapsedSeconds: number, path
   enemy.redStacks = Math.max(0, enemy.redStacks - STACK_DECAY_PER_SECOND * dt)
   enemy.greenStacks = Math.max(0, enemy.greenStacks - STACK_DECAY_PER_SECOND * dt)
 
-  if (enemy.redStacks > 0) dealDamage(enemy, (enemy.redStacks / TIER2_STACK_MAX) * RED_BURN_MAX_DPS * dt)
-  if (enemy.greenStacks > 0) dealDamage(enemy, (enemy.greenStacks / TIER2_STACK_MAX) * GREEN_POISON_MAX_DPS * dt)
+  if (enemy.redStacks > 0) dealDamage(enemy, (enemy.redStacks / TIER2_STACK_MAX) * RED_BURN_MAX_HP_FRACTION_PER_SECOND * enemy.maxHp * dt)
+  if (enemy.greenStacks > 0) dealDamage(enemy, (enemy.greenStacks / TIER2_STACK_MAX) * GREEN_POISON_MAX_HP_FRACTION_PER_SECOND * enemy.maxHp * dt)
 
   if (enemy.blackStacksExpireAt <= elapsedSeconds) enemy.blackStacks = 0
 }

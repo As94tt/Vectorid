@@ -1,22 +1,13 @@
 import { COLORS } from '../constants/colors'
-import { RESOURCES } from '../data/resources'
-import { getBalance, type Inventory } from '../economy/inventory'
-import {
-  drawCard,
-  drawCheatIcon,
-  drawCurrencyIcon,
-  drawDemolishIcon,
-  drawMenuIcon,
-  drawPauseIcon,
-  drawPlayIcon,
-  drawSaveIcon,
-  drawSettingsIcon,
-} from './ui'
+import { drawCard, drawCheatIcon, drawDemolishIcon, drawMenuIcon, drawPauseIcon, drawPlayIcon, drawSaveIcon, drawSettingsIcon } from './ui'
 
-// Globale Kopfzeile: Spielername/Level, Lumen-/Prisma-Bestand, Einstellungen/Speichern (noch ohne
-// Funktion), Menü (ebenfalls ohne Funktion, nur Referenzbild-Parität) und ein Cheat-Button (+100
-// auf alles). Komplett Canvas-gezeichnet, damit dieselbe Pointer-Event-Interaktion wie im Rest des
-// Spiels genutzt werden kann (kein Mischen von DOM-Buttons und Canvas-Dragging).
+// Globale Kopfzeile: Spielername/Level, Einstellungen/Speichern (noch ohne Funktion), Menü
+// (ebenfalls ohne Funktion, nur Referenzbild-Parität) und ein Cheat-Button (+100 auf alles).
+// Lumen-/Prisma-Bestand steht NICHT mehr hier (User-Vorgabe: "move the currencies... between the
+// building categories, wo aktuell die Trennlinie vorhanden ist") — siehe main.ts
+// drawCurrencyPanel(), das zeigt ihn jetzt in der Kauf-Leiste an. Komplett Canvas-gezeichnet,
+// damit dieselbe Pointer-Event-Interaktion wie im Rest des Spiels genutzt werden kann (kein
+// Mischen von DOM-Buttons und Canvas-Dragging).
 
 // User-Vorgabe: höher, damit Titel/Tagline-Zeile UND die (jetzt kartenförmigen) Buttons bequem
 // Platz haben — vorher reine Text-Buttons in einer knappen 52px-Zeile.
@@ -85,7 +76,7 @@ function drawButton(ctx: CanvasRenderingContext2D, button: HudButton, active: bo
 
   ctx.save()
   ctx.fillStyle = color
-  ctx.font = '11px monospace'
+  ctx.font = '12px monospace'
   ctx.textAlign = 'left'
   ctx.textBaseline = 'middle'
   ctx.fillText(label ?? (active ? 'ON' : button.label), iconX + 16, iconY + 1)
@@ -95,7 +86,6 @@ function drawButton(ctx: CanvasRenderingContext2D, button: HudButton, active: bo
 export function drawHud(
   ctx: CanvasRenderingContext2D,
   width: number,
-  inventory: Inventory,
   playerName: string,
   level: number,
   buttons: HudButton[],
@@ -113,68 +103,23 @@ export function drawHud(
   ctx.stroke()
   ctx.restore()
 
-  const midY = HUD_HEIGHT / 2
-
   ctx.save()
   ctx.textBaseline = 'middle'
   ctx.fillStyle = COLORS.textBright
-  ctx.font = 'bold 15px monospace'
+  ctx.font = 'bold 16px monospace'
   ctx.fillText(playerName, 20, HUD_HEIGHT * 0.36)
   // Bugfix: Breite MUSS mit der noch aktiven (fetten 15px-) Schriftart gemessen werden, bevor auf
   // die kleinere LVL-Schriftart gewechselt wird — sonst kommt ein zu kleiner (falscher) Wert
   // heraus und "LVL" rückt zu dicht an den Namen heran.
   const nameWidth = ctx.measureText(playerName).width
   ctx.fillStyle = COLORS.textDim
-  ctx.font = '12px monospace'
+  ctx.font = '13px monospace'
   ctx.fillText(`LVL ${level}`, 20 + nameWidth + 16, HUD_HEIGHT * 0.36)
   // User-Vorgabe: Referenzbild-Tagline unter Name/Level.
   ctx.fillStyle = COLORS.accent
-  ctx.font = '10px monospace'
+  ctx.font = '11px monospace'
   ctx.fillText('DEFEND · COMBINE · EVOLVE', 20, HUD_HEIGHT * 0.72)
   ctx.restore()
-
-  // Ressourcenliste ist auf den Bereich links der Buttons begrenzt (clip), sonst würde eine
-  // lange Liste in die Buttons laufen. Nur noch Lumen/Prisma (Spezial-Ressourcen, Kampf-Belohnung)
-  // — die 14 Kampf-/Mischfarben sind seit der Umstellung auf beam-versorgte Türme kein
-  // Bestands-/Ratenwert mehr, der irgendwo im HUD sinnvoll wäre (siehe main.ts economyTick()).
-  const leftmostButtonX = buttons.reduce((min, b) => Math.min(min, b.x), width)
-  const maxX = leftmostButtonX - 20
-
-  const visible = RESOURCES.filter((r) => r.tier === 'special' && getBalance(inventory, r.id) > 0)
-
-  ctx.save()
-  ctx.beginPath()
-  ctx.rect(210, 0, Math.max(0, maxX - 210), HUD_HEIGHT)
-  ctx.clip()
-  ctx.textBaseline = 'middle'
-  ctx.font = '12px monospace'
-  let cursor = 220
-  let shown = 0
-  for (const resource of visible) {
-    const label = Math.floor(getBalance(inventory, resource.id)).toString()
-    const entryWidth = 11 + ctx.measureText(label).width + 18
-    if (cursor + entryWidth > maxX) break
-    // User-Vorgabe: Prisma als Dreieck statt Kreis, damit es sich auf einen Blick von Lumen
-    // unterscheidet (vorher nur per Farbe, das reichte dem User nicht) — siehe render/ui.ts
-    // drawCurrencyIcon(), dieselbe Form wird jetzt auch überall sonst genutzt, wo ein Kosten-
-    // Betrag steht (Kauf-Leisten-Karten, Upgrade-Knopf).
-    drawCurrencyIcon(ctx, cursor, midY, resource.id, resource.color, 5.6)
-    cursor += 11
-    ctx.fillStyle = COLORS.textDim
-    ctx.fillText(label, cursor, midY)
-    cursor += ctx.measureText(label).width + 18
-    shown++
-  }
-  ctx.restore()
-
-  if (shown < visible.length) {
-    ctx.save()
-    ctx.textBaseline = 'middle'
-    ctx.font = '12px monospace'
-    ctx.fillStyle = COLORS.textDim
-    ctx.fillText(`+${visible.length - shown}`, maxX + 4, midY)
-    ctx.restore()
-  }
 
   for (const button of buttons) {
     if (button.id === 'pause') {

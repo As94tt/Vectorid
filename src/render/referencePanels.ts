@@ -64,11 +64,11 @@ function drawPanelChrome(ctx: CanvasRenderingContext2D, width: number, height: n
   ctx.save()
   ctx.textAlign = 'center'
   ctx.fillStyle = COLORS.textBright
-  ctx.font = 'bold 17px monospace'
+  ctx.font = 'bold 18px monospace'
   ctx.fillText(title, bounds.x + bounds.width / 2, bounds.y + 34)
   if (subtitle) {
     ctx.fillStyle = COLORS.textMid
-    ctx.font = '12px monospace'
+    ctx.font = '13px monospace'
     ctx.fillText(subtitle, bounds.x + bounds.width / 2, bounds.y + 50)
   }
   ctx.restore()
@@ -172,7 +172,7 @@ function drawTierHeader(ctx: CanvasRenderingContext2D, x: number, y: number, wid
   ctx.textAlign = 'left'
   ctx.textBaseline = 'middle'
   ctx.fillStyle = COLORS.textDim
-  ctx.font = 'bold 11px monospace'
+  ctx.font = 'bold 12px monospace'
   const label = `TIER ${tier}`
   ctx.fillText(label, x, y)
   const labelWidth = ctx.measureText(label).width
@@ -229,7 +229,7 @@ export function drawColorGuideList(
 
       // Höhe erst BERECHNEN (braucht die fertig umgebrochenen Effekt-Zeilen), dann die Karte
       // zeichnen, dann den Inhalt darüber — sonst wüsste die Karte ihre eigene Höhe nicht im Voraus.
-      ctx.font = '10px monospace'
+      ctx.font = '11px monospace'
       const effectLines = effect ? wrapLines(ctx, `${effect.name}: ${effect.description}`, width - DETAIL_CARD_PADDING * 2 - 12, 2) : []
       const recipeLineCount = recipeEntries.length === 0 ? 1 : recipeEntries.length
       const contentLines = recipeLineCount + effectLines.length
@@ -248,11 +248,11 @@ export function drawColorGuideList(
       drawCircle(ctx, swatchX, lineY - 3, 6, resource.color, 6)
       drawCircleOutline(ctx, swatchX, lineY - 3, 6, COLORS.gridLineStrong, 1, 0)
       ctx.fillStyle = readableTextColor(resource.color)
-      ctx.font = 'bold 12px monospace'
+      ctx.font = 'bold 13px monospace'
       ctx.fillText(resource.name, textX, lineY)
       lineY += DETAIL_LINE_HEIGHT
 
-      ctx.font = '10px monospace'
+      ctx.font = '11px monospace'
       if (recipeEntries.length === 0) {
         ctx.fillStyle = COLORS.textDim
         ctx.fillText('Purchased', textX, lineY)
@@ -289,10 +289,10 @@ export function drawColorGuideSidebarTitle(ctx: CanvasRenderingContext2D, x: num
   ctx.save()
   ctx.textAlign = 'left'
   ctx.fillStyle = COLORS.textBright
-  ctx.font = 'bold 15px monospace'
+  ctx.font = 'bold 16px monospace'
   ctx.fillText('Colors & Combinations', x, y)
   ctx.fillStyle = COLORS.textDim
-  ctx.font = '11px monospace'
+  ctx.font = '12px monospace'
   ctx.fillText('Combine colors to create powerful towers', x, y + 18)
   ctx.restore()
 }
@@ -332,12 +332,12 @@ export function drawWelcomePanel(ctx: CanvasRenderingContext2D, width: number, h
   ctx.textAlign = 'left'
   for (const step of QUICK_START_STEPS) {
     ctx.fillStyle = COLORS.textBright
-    ctx.font = 'bold 15px monospace'
+    ctx.font = 'bold 16px monospace'
     ctx.fillText(step.title, contentX, cursorY)
     cursorY += 20
 
     ctx.fillStyle = COLORS.textMid
-    ctx.font = '13px monospace'
+    ctx.font = '14px monospace'
     const lines = wrapLines(ctx, step.body, contentW, 3)
     lines.forEach((line) => {
       ctx.fillText(line, contentX, cursorY)
@@ -350,7 +350,7 @@ export function drawWelcomePanel(ctx: CanvasRenderingContext2D, width: number, h
   ctx.save()
   ctx.textAlign = 'center'
   ctx.fillStyle = COLORS.textBright
-  ctx.font = 'bold 16px monospace'
+  ctx.font = 'bold 17px monospace'
   ctx.fillText('Mix.  Build.  Defend.', bounds.x + bounds.width / 2, bounds.y + bounds.height - 24)
   ctx.restore()
 }

@@ -8,7 +8,7 @@
 //   Turmform -> bestimmt, wie Treffer verteilt werden (siehe combat.ts)
 //   Munition -> bestimmt hier, WELCHER Farb-Effekt beim Treffer ausgelöst wird
 
-import { dealDamage, type Enemy, type Tier3StackKey } from './enemies'
+import { dealDamage, type ChartreuseSpreadKey, type Enemy } from './enemies'
 import {
   AMBER_EXPLOSION_DAMAGE_FRACTION,
   AMBER_EXPLOSION_RADIUS,
@@ -23,6 +23,7 @@ import {
   CHARTREUSE_SPREAD_FRACTION,
   CHARTREUSE_SPREAD_RADIUS,
   CYAN_SLOW_DURATION,
+  FUCHSIA_MAX_DAMAGE_MULTIPLIER,
   FUCHSIA_MAX_JUMPS,
   FUCHSIA_STACK_MAX,
   MAGENTA_BONUS_DAMAGE,
@@ -99,25 +100,31 @@ function applyViolet(target: Enemy) {
   target.violetStacks = Math.min(VIOLET_STACK_MAX, target.violetStacks + 1)
 }
 
-const TIER3_STACK_ACCESSORS: { key: Tier3StackKey; get: (e: Enemy) => number; set: (e: Enemy, v: number) => void; max: number }[] = [
+const CHARTREUSE_SPREAD_ACCESSORS: { key: ChartreuseSpreadKey; get: (e: Enemy) => number; set: (e: Enemy, v: number) => void; max: number }[] = [
+  { key: 'blue', get: (e) => e.blueStacks, set: (e, v) => (e.blueStacks = v), max: TIER2_STACK_MAX },
+  { key: 'red', get: (e) => e.redStacks, set: (e, v) => (e.redStacks = v), max: TIER2_STACK_MAX },
+  { key: 'green', get: (e) => e.greenStacks, set: (e, v) => (e.greenStacks = v), max: TIER2_STACK_MAX },
   { key: 'cerulean', get: (e) => e.ceruleanStacks, set: (e, v) => (e.ceruleanStacks = v), max: CERULEAN_STACK_MAX },
   { key: 'violet', get: (e) => e.violetStacks, set: (e, v) => (e.violetStacks = v), max: VIOLET_STACK_MAX },
 ]
 
 /** Chartreuse hat keinen eigenen Stack-Pool — überträgt stattdessen bis zu 50% der VORHANDENEN
- * Cerulean-/Violet-Stacks (Tier 3) des Ziels auf Gegner in der Nähe. Stacks, die selbst schon per
- * Spread empfangen wurden, werden dabei ausgelassen (siehe `tier3SpreadBlock` in enemies.ts),
- * damit keine Kettenreaktion entsteht. */
+ * Tier-2- (Blue/Red/Green) UND Tier-3- (Cerulean/Violet) Stacks des Ziels auf Gegner in der Nähe
+ * (User-Vorgabe: vorher nur Tier 3). Dabei werden die Ziel-Stacks der Umstehenden REFRESHT (auf
+ * mindestens den Spread-Betrag angehoben, nie verringert — User-Vorgabe: "spread... and also
+ * refresh them"), statt nur draufaddiert zu werden. Stacks, die selbst schon per Spread empfangen
+ * wurden, werden dabei ausgelassen (siehe `chartreuseSpreadBlock` in enemies.ts), damit keine
+ * Kettenreaktion entsteht. */
 function applyChartreuse(target: Enemy, allEnemies: Enemy[], pathPixels: Point[]) {
   const nearby = findNearbyEnemies(allEnemies, target, pathPixels, CHARTREUSE_SPREAD_RADIUS, new Set())
   if (nearby.length === 0) return
-  for (const accessor of TIER3_STACK_ACCESSORS) {
-    if (target.tier3SpreadBlock.has(accessor.key)) continue
+  for (const accessor of CHARTREUSE_SPREAD_ACCESSORS) {
+    if (target.chartreuseSpreadBlock.has(accessor.key)) continue
     const amount = accessor.get(target) * CHARTREUSE_SPREAD_FRACTION
     if (amount <= 0) continue
     for (const other of nearby) {
-      accessor.set(other, Math.min(accessor.max, accessor.get(other) + amount))
-      other.tier3SpreadBlock.add(accessor.key)
+      accessor.set(other, Math.min(accessor.max, Math.max(accessor.get(other), amount)))
+      other.chartreuseSpreadBlock.add(accessor.key)
     }
   }
 }
@@ -136,8 +143,13 @@ function applyAquamarine(target: Enemy, allEnemies: Enemy[], pathPixels: Point[]
 
 function applyFuchsia(target: Enemy, damage: number, allEnemies: Enemy[], pathPixels: Point[]) {
   target.fuchsiaStacks = Math.min(FUCHSIA_STACK_MAX, target.fuchsiaStacks + 1)
-  const jumps = Math.floor((target.fuchsiaStacks / FUCHSIA_STACK_MAX) * FUCHSIA_MAX_JUMPS)
-  chainLightning(target, damage, jumps, allEnemies, pathPixels)
+  const stackFraction = target.fuchsiaStacks / FUCHSIA_STACK_MAX
+  const jumps = Math.floor(stackFraction * FUCHSIA_MAX_JUMPS)
+  // User-Vorgabe: "increased stacks mean increased targets & increased damage" — Schaden pro
+  // Sprung skaliert jetzt zusätzlich zur Sprunganzahl mit den Stacks (1x bei 0, bis zu
+  // FUCHSIA_MAX_DAMAGE_MULTIPLIER-fach bei FUCHSIA_STACK_MAX Stacks).
+  const scaledDamage = damage * (1 + stackFraction * (FUCHSIA_MAX_DAMAGE_MULTIPLIER - 1))
+  chainLightning(target, scaledDamage, jumps, allEnemies, pathPixels)
 }
 
 function applyAmber(target: Enemy, allEnemies: Enemy[], pathPixels: Point[]) {
@@ -247,9 +259,9 @@ export const COLOR_EFFECT_INFO: Record<string, { name: string; description: stri
   green: { name: 'Poison', description: 'Resets poison to 10 stacks.' },
   cerulean: { name: 'Freeze', description: 'At 30 stacks: freeze for 1s.' },
   violet: { name: 'Vulnerability', description: 'Up to +10% damage taken.' },
-  chartreuse: { name: 'Stack Spread', description: 'Spreads Tier 3 stacks to nearby enemies.' },
+  chartreuse: { name: 'Stack Spread', description: 'Spreads & refreshes Tier 2/3 stacks nearby.' },
   aquamarine: { name: 'Pull', description: 'Pulls nearby enemies together.' },
-  fuchsia: { name: 'Scaling Chain Lightning', description: 'More stacks = more chained targets.' },
+  fuchsia: { name: 'Scaling Chain Lightning', description: 'More stacks = more targets & damage.' },
   amber: { name: 'Explosion', description: 'At 30 stacks: AoE damage.' },
   black: { name: 'Execute', description: 'Raises execute threshold per hit.' },
   white: { name: 'Purge Burst', description: 'Consumes all stacks for burst damage.' },

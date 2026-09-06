@@ -165,9 +165,9 @@ export function drawTowerPaletteItem(ctx: CanvasRenderingContext2D, item: TowerP
 
   ctx.textAlign = 'center'
   ctx.fillStyle = '#9aa0ab'
-  ctx.font = '10px monospace'
-  ctx.fillText(item.name, item.x, item.y + item.radius + 14)
   ctx.font = '11px monospace'
+  ctx.fillText(item.name, item.x, item.y + item.radius + 14)
+  ctx.font = '12px monospace'
   drawCenteredCostTag(ctx, item.x, item.y + item.radius + 26, item.cost, item.costResourceId, getResource(item.costResourceId).color)
   ctx.restore()
 }

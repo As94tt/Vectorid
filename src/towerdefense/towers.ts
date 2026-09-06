@@ -36,7 +36,10 @@ export interface TowerDefinition {
 }
 
 export const TOWER_DEFINITIONS: TowerDefinition[] = [
-  { kind: 'pulse', name: 'Pulse', description: '360° pulses, short range, hits many enemies', cost: 15, range: 90, damage: 8, fireInterval: 1.0, consumption: 1 },
+  // User-Vorgabe (Balance): Pulse ist für Stack-Verbreitung da, nicht für Schaden — Grundschaden
+  // drastisch runter (8 -> 3), dafür deutlich schnellere Feuerrate (1.0s -> 0.65s Intervall), damit
+  // es weiterhin oft genug trifft, um Stacks (Burn/Poison/Slow/...) zuverlässig aufzubauen.
+  { kind: 'pulse', name: 'Pulse', description: '360° pulses, short range, hits many enemies', cost: 15, range: 90, damage: 3, fireInterval: 0.65, consumption: 1 },
   {
     kind: 'rapid',
     name: 'Rapid',
@@ -61,25 +64,27 @@ export const TOWER_DEFINITIONS: TowerDefinition[] = [
     consumption: 1.5,
   },
   {
+    // User-Vorgabe (Balance): Schaden leicht erhöht (6 -> 7).
     kind: 'multishot',
     name: 'Multishot',
     description: 'Fires multiple projectiles at once',
     cost: 35,
     range: 120,
-    damage: 6,
+    damage: 7,
     fireInterval: 0.9,
     projectileSpeed: 420,
     projectileCount: 3,
     consumption: 2,
   },
   {
+    // User-Vorgabe (Balance): Feuerrate leicht erhöht (Intervall 2.2s -> 2.0s).
     kind: 'sniper',
     name: 'Sniper',
     description: 'Slow, long range, high single-target damage',
     cost: 40,
     range: 230,
     damage: 34,
-    fireInterval: 2.2,
+    fireInterval: 2.0,
     projectileSpeed: 900,
     consumption: 1.5,
   },
@@ -96,13 +101,14 @@ export const TOWER_DEFINITIONS: TowerDefinition[] = [
   },
   { kind: 'beam', name: 'Beam', description: 'Permanent laser locked on one target', cost: 60, range: 150, damage: 5, fireInterval: 0.15, consumption: 2.5 },
   {
+    // User-Vorgabe (Balance): Feuerrate leicht erhöht (Intervall nach der Salve 2.0s -> 1.8s).
     kind: 'burst',
     name: 'Burst',
     description: 'Charges up, then fires powerful volleys',
     cost: 70,
     range: 140,
     damage: 9,
-    fireInterval: 2.0,
+    fireInterval: 1.8,
     projectileSpeed: 480,
     chargeTime: 1.6,
     volleyCount: 5,

@@ -32,7 +32,7 @@ import {
   type PlacementGrid,
 } from './grid/placementGrid'
 import { buildDefenseLookup, traceDefensePath, type Occupancy } from './grid/routing'
-import { addToInventory, canAfford, cheatAddHundredToAll, createInventory, spend, type Inventory } from './economy/inventory'
+import { addToInventory, canAfford, cheatAddHundredToAll, createInventory, getBalance, spend, type Inventory } from './economy/inventory'
 import {
   buildPalette,
   drawBeamSegment,
@@ -77,7 +77,7 @@ import { activeStackCounts, pruneEnemies, tickEnemy, type Enemy } from './towerd
 import { createWaveState, isBossWave, tickWaveSpawning, BOSS_LUMEN_MULTIPLIER, BOSS_WAVE_PAUSE_SECONDS, WAVE_PAUSE_SECONDS, type WaveState } from './towerdefense/waves'
 import { drawEnemies, drawProjectiles, drawTowerCombatEffects, drawVisualEffects } from './render/combatRender'
 import { drawColorGuideList, drawColorGuideSidebarTitle, drawWelcomePanel, hitTestReferencePanelClose } from './render/referencePanels'
-import { drawCard, drawCurrencyIcon, drawHeartIcon, drawProgressBar, drawSkullIcon, healthFractionColor } from './render/ui'
+import { drawCard, drawCenteredCostTag, drawCurrencyIcon, drawHeartIcon, drawProgressBar, drawSkullIcon, healthFractionColor } from './render/ui'
 
 const canvas = document.getElementById('scene') as HTMLCanvasElement
 const ctx = canvas.getContext('2d')
@@ -184,7 +184,10 @@ function nextTowerId(): string {
  * Trennstrich) trotzdem exakt bei `width/2` bleibt, wo auch der Endpunkt-Stein fluchtet (siehe
  * buildWorld()). */
 const PALETTE_GAP = 64
-const PALETTE_GROUP_GAP = 48
+// User-Vorgabe: mehr Abstand zwischen der Währungs-Karte (siehe drawCurrencyPanel()) und den
+// beiden Nachbar-Karten links/rechts — vorher berührten sich Kartenränder und Währungs-Karte
+// direkt (0px Lücke, da CURRENCY_PANEL_WIDTH die komplette damalige Lücke ausfüllte).
+const PALETTE_GROUP_GAP = 76
 const PALETTE_ROW_Y = HUD_HEIGHT + 44
 
 function buildScene() {
@@ -921,23 +924,36 @@ function drawTowerPalette() {
   }
 }
 
-/** Feiner Trennstrich zwischen Economy- (Generatoren/Prisma/Mirror/Grid) und Turm-Hälfte der
- * kombinierten Kauf-Leiste (User-Vorgabe: wieder wie früher) — mittig zwischen dem letzten
- * Economy- und dem ersten Turm-Icon, exakt in der Bildschirmmitte (siehe buildScene()). Spannt
- * etwas über die Kartenränder hinaus (Karten sind 30px über/44px unter `item.y`, siehe
- * render/buildingRender.ts paletteCardBounds()). */
-function drawPaletteDivider() {
+/** Lumen-/Prisma-Bestand — User-Vorgabe: "move the currencies... between the building categories
+ * (economy & towers), wo aktuell die Trennlinie vorhanden ist" — ersetzt den bisher bloßen
+ * Trennstrich zwischen Economy- und Turm-Hälfte der Kauf-Leiste (vorher hier, das HUD zeigte den
+ * Bestand separat oben — siehe render/hud.ts drawHud(), zeigt ihn jetzt nicht mehr) durch eine
+ * kleine Karte mit beiden Werten übereinander, exakt an derselben Mittelposition (siehe
+ * buildScene()). Niedriger und tiefer angesetzt als die Kauf-Leisten-Karten (die brauchen Platz für
+ * Icon+Name+Kosten, hier reichen 2 Zahlen-Zeilen) — User-Vorgabe: "etwas nach unten, sodass das
+ * Ziel der enemies nicht in dem Kasten ist", der Endpunkt-Stein sitzt sonst direkt darunter (siehe
+ * endpointNode()) und sein Glühen ragte in die (vorher bis PALETTE_ROW_Y-30 hochreichende) Karte
+ * hinein. */
+const CURRENCY_PANEL_WIDTH = 56
+const CURRENCY_PANEL_HEIGHT = 48
+const CURRENCY_PANEL_TOP_OFFSET = 16
+
+function drawCurrencyPanel() {
   const lastEconomy = paletteItems[paletteItems.length - 1]
   const firstTower = towerPaletteItems[0]
   if (!lastEconomy || !firstTower) return
   const x = (lastEconomy.x + lastEconomy.radius + (firstTower.x - firstTower.radius)) / 2
+  const top = PALETTE_ROW_Y - CURRENCY_PANEL_TOP_OFFSET
+  drawCard(ctx!, x - CURRENCY_PANEL_WIDTH / 2, top, CURRENCY_PANEL_WIDTH, CURRENCY_PANEL_HEIGHT)
+
+  const special = RESOURCES.filter((r) => r.tier === 'special')
   ctx!.save()
-  ctx!.strokeStyle = COLORS.gridLineStrong
-  ctx!.lineWidth = 1
-  ctx!.beginPath()
-  ctx!.moveTo(x, PALETTE_ROW_Y - 34)
-  ctx!.lineTo(x, PALETTE_ROW_Y + 48)
-  ctx!.stroke()
+  ctx!.font = '13px monospace'
+  special.forEach((resource, i) => {
+    const rowY = top + 19 + i * 20
+    const balance = Math.floor(getBalance(inventory, resource.id))
+    drawCenteredCostTag(ctx!, x, rowY, balance, resource.id, resource.color)
+  })
   ctx!.restore()
 }
 
@@ -952,11 +968,11 @@ function drawPaletteTooltips() {
   if (welcomeOpen) return
   if (hoveredEconomyItem) {
     const item = hoveredEconomyItem
-    drawLabel(ctx!, paletteItemDescription(item.kind), item.x, item.y - item.radius - 14, '12px monospace', COLORS.textBright, 15)
+    drawLabel(ctx!, paletteItemDescription(item.kind), item.x, item.y - item.radius - 14, '13px monospace', COLORS.textBright, 15)
   }
   if (hoveredTowerItem) {
     const item = hoveredTowerItem
-    drawLabel(ctx!, `${item.name} — ${towerPaletteItemDescription(item.kind)}`, item.x, item.y - item.radius - 14, '12px monospace', COLORS.textBright, 15)
+    drawLabel(ctx!, `${item.name} — ${towerPaletteItemDescription(item.kind)}`, item.x, item.y - item.radius - 14, '13px monospace', COLORS.textBright, 15)
   }
 }
 
@@ -1131,7 +1147,7 @@ function drawWaveCard(x: number, y: number): number {
   ctx!.save()
   ctx!.textAlign = 'left'
   ctx!.textBaseline = 'alphabetic'
-  ctx!.font = 'bold 14px monospace'
+  ctx!.font = 'bold 15px monospace'
   ctx!.fillStyle = boss ? '#ffcc33' : COLORS.textBright
   ctx!.fillText(boss ? `WAVE ${waveState.currentWave} — BOSS` : `WAVE ${waveState.currentWave}`, x + CARD_PADDING, cursorY)
   cursorY += 20
@@ -1148,7 +1164,7 @@ function drawWaveCard(x: number, y: number): number {
   const remaining = Math.max(0, waveState.totalInWave - enemiesResolvedInWave)
   drawSkullIcon(ctx!, x + CARD_PADDING + 6, cursorY - 4, 7, COLORS.textMid)
   ctx!.fillStyle = COLORS.textMid
-  ctx!.font = '12px monospace'
+  ctx!.font = '13px monospace'
   ctx!.fillText(`${remaining} remaining`, x + CARD_PADDING + 18, cursorY)
   cursorY += 18
 
@@ -1174,7 +1190,7 @@ function drawBaseHpCard(x: number, y: number): number {
   ctx!.save()
   ctx!.textAlign = 'left'
   ctx!.textBaseline = 'alphabetic'
-  ctx!.font = 'bold 13px monospace'
+  ctx!.font = 'bold 14px monospace'
   ctx!.fillStyle = COLORS.textBright
   ctx!.fillText('BASE HP', x + CARD_PADDING + 20, cursorY)
   cursorY += 22
@@ -1184,7 +1200,7 @@ function drawBaseHpCard(x: number, y: number): number {
   cursorY += 22
 
   ctx!.textAlign = 'right'
-  ctx!.font = '12px monospace'
+  ctx!.font = '13px monospace'
   ctx!.fillStyle = COLORS.textMid
   ctx!.fillText(`${Math.max(0, Math.round(baseHp))}/${BASE_MAX_HP}`, x + SIDE_PANEL_WIDTH - CARD_PADDING, cursorY)
   ctx!.restore()
@@ -1204,7 +1220,7 @@ function drawTowerDamageCard(x: number, y: number, entries: LoadoutSummaryEntry[
   ctx!.textAlign = 'left'
   ctx!.textBaseline = 'alphabetic'
   ctx!.fillStyle = COLORS.textDim
-  ctx!.font = 'bold 11px monospace'
+  ctx!.font = 'bold 12px monospace'
   ctx!.fillText('TOWER DAMAGE (THIS WAVE)', x + CARD_PADDING, cursorY)
   cursorY += 22
 
@@ -1219,7 +1235,7 @@ function drawTowerDamageCard(x: number, y: number, entries: LoadoutSummaryEntry[
 
     ctx!.textAlign = 'left'
     ctx!.fillStyle = COLORS.textBright
-    ctx!.font = '13px monospace'
+    ctx!.font = '14px monospace'
     ctx!.fillText(`${entry.count}x ${resource.name} ${def.name}`, x + CARD_PADDING + 16, cursorY)
 
     ctx!.textAlign = 'right'
@@ -1288,14 +1304,14 @@ function drawSelectedCard(x: number, y: number) {
   ctx!.textAlign = 'left'
   ctx!.textBaseline = 'alphabetic'
   ctx!.fillStyle = COLORS.textDim
-  ctx!.font = 'bold 11px monospace'
+  ctx!.font = 'bold 12px monospace'
   ctx!.fillText('SELECTED', x + CARD_PADDING, cursorY)
   ctx!.fillStyle = COLORS.textBright
-  ctx!.font = 'bold 14px monospace'
+  ctx!.font = 'bold 15px monospace'
   ctx!.fillText(selected.title, x + CARD_PADDING, cursorY + 18)
   cursorY += 34
 
-  ctx!.font = '12px monospace'
+  ctx!.font = '13px monospace'
   ctx!.textBaseline = 'middle'
   for (const row of selected.rows) {
     ctx!.fillStyle = COLORS.textDim
@@ -1322,7 +1338,7 @@ function drawSelectedCard(x: number, y: number) {
   ctx!.save()
   ctx!.textAlign = 'center'
   ctx!.textBaseline = 'middle'
-  ctx!.font = '11px monospace'
+  ctx!.font = '12px monospace'
 
   drawCard(ctx!, upgradeButton.x, upgradeButton.y, upgradeButton.width, upgradeButton.height, canUpgrade)
   const upgradeTextColor = canUpgrade ? COLORS.accent : COLORS.textDim
@@ -1356,7 +1372,7 @@ function drawBaseDestroyedMessage() {
   ctx!.save()
   ctx!.globalAlpha = alpha
   ctx!.textAlign = 'center'
-  ctx!.font = 'bold 16px monospace'
+  ctx!.font = 'bold 17px monospace'
   ctx!.fillStyle = '#ff3355'
   ctx!.fillText('BASE DESTROYED — RESETTING TO WAVE 1', width / 2, SIDE_PANEL_TOP - 24)
   ctx!.restore()
@@ -1677,12 +1693,12 @@ function render(_dt: number) {
 
   drawEconomyPalette()
   drawTowerPalette()
-  drawPaletteDivider()
+  drawCurrencyPanel()
   drawPaletteTooltips()
   drawLeftSidebar()
   drawRightSidebar()
   drawBaseDestroyedMessage()
-  drawHud(ctx!, width, inventory, playerName, playerLevel, hudButtons, demolishMode, gamePaused)
+  drawHud(ctx!, width, playerName, playerLevel, hudButtons, demolishMode, gamePaused)
 
   if (welcomeOpen) drawWelcomePanel(ctx!, width, height)
 }

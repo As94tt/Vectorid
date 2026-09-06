@@ -471,15 +471,15 @@ export function drawPaletteItem(ctx: CanvasRenderingContext2D, item: PaletteItem
   }
 
   ctx.textAlign = 'center'
-  ctx.font = '11px monospace'
+  ctx.font = '12px monospace'
   if (item.name) {
     // Nur `expand-grid` hat einen Namen (siehe PaletteItem-Kommentar) — zweizeiliges Label wie
     // bei den Turm-/Info-Icons (towerRender.ts drawTowerPaletteItem()), statt der sonst hier
     // üblichen reinen Kosten-Zeile.
     ctx.fillStyle = '#9aa0ab'
-    ctx.font = '10px monospace'
-    ctx.fillText(item.name, item.x, item.y + item.radius + 14)
     ctx.font = '11px monospace'
+    ctx.fillText(item.name, item.x, item.y + item.radius + 14)
+    ctx.font = '12px monospace'
     drawCenteredCostTag(ctx, item.x, item.y + item.radius + 26, item.cost, item.costResourceId, getResource(item.costResourceId).color)
   } else {
     drawCenteredCostTag(ctx, item.x, item.y + item.radius + 16, item.cost, item.costResourceId, getResource(item.costResourceId).color)
