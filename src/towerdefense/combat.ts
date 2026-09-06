@@ -80,12 +80,14 @@ function treatHit(
 /**
  * Die Grundformen zeigen standardmäßig nach oben (Polygon-Konvention, siehe render/shapes.ts) —
  * darum +90° für alle eckigen/sternförmigen Türme, damit eine Spitze/Ecke exakt Richtung Ziel
- * zeigt (Rapid/Multishot/Sniper/Burst — eine Drehung ändert dort nie die erkennbare Form).
+ * zeigt (Rapid/Multishot/Sniper/Burst/Cannon — eine Drehung ändert dort nie die erkennbare Form).
  * Halbkreis (Flamethrower) nutzt seine eigene, direkte Winkel-Konvention. Kreis (Pulse) braucht
- * keine Rotation (rundum symmetrisch). Cannon (Quadrat) und Beam (auf 45° fixierte Raute) drehen
- * sich bewusst NICHT mit dem Ziel — ein beliebig gedrehtes Quadrat könnte sonst optisch mit der
- * jeweils anderen Form verwechselt werden (siehe die beiden Sonderfälle in `updateProjectileTower`/
- * `updateBeam`, die `aimRotation()` für diese zwei Turmarten gar nicht erst aufrufen).
+ * keine Rotation (rundum symmetrisch, eine Drehung hätte ohnehin keinen sichtbaren Effekt). Raute
+ * (Beam) bekommt zusätzlich zum Standard-+90° noch +45° obendrauf (siehe defaultTowerRotation()) —
+ * damit bleibt sie bei JEDEM Zielwinkel exakt 45° zur "Cannon-Rotation" versetzt (Cannon: `angle +
+ * 90°`, mod 90° identisch zu `angle`), Quadrat und Raute sind also immer unterscheidbar, obwohl
+ * sich jetzt (User-Vorgabe: "ich möchte, dass sich alle Türme in die Richtung des Ziels drehen")
+ * BEIDE mit dem Ziel drehen statt fest zu stehen.
  */
 function aimRotation(kind: TowerKind, angle: number): number {
   switch (kind) {
@@ -93,6 +95,8 @@ function aimRotation(kind: TowerKind, angle: number): number {
       return 0
     case 'flamethrower':
       return angle
+    case 'beam':
+      return angle + Math.PI / 2 + Math.PI / 4
     default:
       return angle + Math.PI / 2
   }
@@ -167,11 +171,7 @@ function updateProjectileTower(
   const targets = targetsInRange(enemies, center, def.range, pathPixels)
   if (targets.length === 0) return
 
-  // Cannon (Quadrat) dreht sich NICHT mit — ein beliebig gedrehtes Quadrat kann optisch wie die
-  // Raute (Beam, fest auf 45°) aussehen, das würde die Form-Bedeutung der beiden Türme vermischen.
-  if (tower.kind !== 'cannon') {
-    tower.rotation = aimRotation(tower.kind, angleBetween(center, getPointAtProgress(pathPixels, targets[0].progress)))
-  }
+  tower.rotation = aimRotation(tower.kind, angleBetween(center, getPointAtProgress(pathPixels, targets[0].progress)))
   if (tower.cooldown > 0) return
 
   const chosen = targets.slice(0, def.projectileCount ?? 1)
@@ -232,9 +232,7 @@ function updateBeam(
   tower.active = !!target
   if (!target) return
 
-  // Beam bleibt fest auf seiner 45°-Rauten-Neigung (siehe defaultTowerRotation()) statt sich
-  // zum Ziel zu drehen — sonst könnte es bei bestimmten Winkeln wie ein normales (Cannon-)
-  // Quadrat aussehen. Die Laserlinie selbst (render/combatRender.ts) zeigt die Zielrichtung.
+  tower.rotation = aimRotation('beam', angleBetween(center, getPointAtProgress(pathPixels, target.progress)))
   if (tower.cooldown > 0) return
 
   treatHit(target, def.damage, tower.resourceId, enemies, pathPixels, elapsedSeconds, tower.kind, damageByLoadout)

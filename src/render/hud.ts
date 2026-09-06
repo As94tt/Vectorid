@@ -1,7 +1,7 @@
 import { COLORS } from '../constants/colors'
 import { RESOURCES } from '../data/resources'
 import { getBalance, type Inventory } from '../economy/inventory'
-import { drawCard, drawCheatIcon, drawDemolishIcon, drawMenuIcon, drawSaveIcon, drawSettingsIcon } from './ui'
+import { drawCard, drawCheatIcon, drawCurrencyIcon, drawDemolishIcon, drawMenuIcon, drawSaveIcon, drawSettingsIcon } from './ui'
 
 // Globale Kopfzeile: Spielername/Level, Lumen-/Prisma-Bestand, Einstellungen/Speichern (noch ohne
 // Funktion), Menü (ebenfalls ohne Funktion, nur Referenzbild-Parität) und ein Cheat-Button (+100
@@ -137,10 +137,11 @@ export function drawHud(
     const label = Math.floor(getBalance(inventory, resource.id)).toString()
     const entryWidth = 11 + ctx.measureText(label).width + 18
     if (cursor + entryWidth > maxX) break
-    ctx.fillStyle = resource.color
-    ctx.beginPath()
-    ctx.arc(cursor, midY, 5, 0, Math.PI * 2)
-    ctx.fill()
+    // User-Vorgabe: Prisma als Dreieck statt Kreis, damit es sich auf einen Blick von Lumen
+    // unterscheidet (vorher nur per Farbe, das reichte dem User nicht) — siehe render/ui.ts
+    // drawCurrencyIcon(), dieselbe Form wird jetzt auch überall sonst genutzt, wo ein Kosten-
+    // Betrag steht (Kauf-Leisten-Karten, Upgrade-Knopf).
+    drawCurrencyIcon(ctx, cursor, midY, resource.id, resource.color, 5.6)
     cursor += 11
     ctx.fillStyle = COLORS.textDim
     ctx.fillText(label, cursor, midY)

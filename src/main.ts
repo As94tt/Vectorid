@@ -43,6 +43,7 @@ import {
   drawMirrorEntity,
   drawPaletteItem,
   drawPrismEntity,
+  drawSelectedCellMarker,
   hitTestPalette,
   isSourceMaxed,
   paletteItemDescription,
@@ -59,6 +60,7 @@ import { buildHudButtons, drawHud, hitTestButton, HUD_HEIGHT, type HudButton } f
 import {
   buildTowerPalette,
   drawTowerEntity,
+  drawTowerLevelRing,
   drawTowerPaletteItem,
   drawTowerPreview,
   hitTestTowerPalette,
@@ -74,8 +76,8 @@ import { updateProjectiles, updateTowers, pruneVisualEffects, type Projectile, t
 import { activeStackCounts, pruneEnemies, tickEnemy, type Enemy } from './towerdefense/enemies'
 import { createWaveState, isBossWave, tickWaveSpawning, BOSS_LUMEN_MULTIPLIER, BOSS_WAVE_PAUSE_SECONDS, WAVE_PAUSE_SECONDS, type WaveState } from './towerdefense/waves'
 import { drawEnemies, drawProjectiles, drawTowerCombatEffects, drawVisualEffects } from './render/combatRender'
-import { drawColorGuideList, drawColorGuideSidebarTitle, drawColorSectionHeader, drawWelcomePanel, hitTestReferencePanelClose } from './render/referencePanels'
-import { drawCard, drawHeartIcon, drawProgressBar, drawSkullIcon, healthFractionColor } from './render/ui'
+import { drawColorGuideList, drawColorGuideSidebarTitle, drawWelcomePanel, hitTestReferencePanelClose } from './render/referencePanels'
+import { drawCard, drawCurrencyIcon, drawHeartIcon, drawProgressBar, drawSkullIcon, healthFractionColor } from './render/ui'
 
 const canvas = document.getElementById('scene') as HTMLCanvasElement
 const ctx = canvas.getContext('2d')
@@ -162,25 +164,27 @@ function nextTowerId(): string {
   return `tower-${towerCounter}`
 }
 
-/** Zwei Reihen der kombinierten Kauf-Leiste (User-Vorgabe: Türme oben, Economy-Bauteile
- * darunter, beide in Karten-Optik, siehe render/ui.ts drawCard()) — jede Reihe unabhängig auf
- * `width/2` zentriert (User-Vorgabe: Endpunkt-Stein soll exakt mit der Kauf-Leisten-Mitte
- * fluchten, siehe buildWorld()) statt wie zuvor über eine gemeinsame Trennstrich-Formel. */
+/** EINE Reihe der kombinierten Kauf-Leiste (User-Vorgabe: wieder wie früher — Economy-Bauteile
+ * links, Türme rechts, mit einem Trennstrich exakt in der Bildschirmmitte, statt der zwischen-
+ * zeitlichen zwei übereinander gestapelten Reihen), Karten-Optik (siehe render/ui.ts drawCard())
+ * bleibt unverändert. Der Trennstrich sitzt mittig zwischen dem letzten Economy- (Index
+ * economyCount-1) und dem ersten Turm-Icon (Index economyCount). Zusätzlich zum normalen
+ * `PALETTE_GAP` steht zwischen den beiden Gruppen `PALETTE_GROUP_GAP` extra Abstand (User-Vorgabe:
+ * "schiebe beide Seiten... etwas mehr von der Mitte weg, damit diese klar getrennt sind") — je zur
+ * Hälfte auf beide Seiten verteilt, damit der Mittelpunkt der beiden Randkarten (und damit der
+ * Trennstrich) trotzdem exakt bei `width/2` bleibt, wo auch der Endpunkt-Stein fluchtet (siehe
+ * buildWorld()). */
 const PALETTE_GAP = 64
-const PALETTE_ROW1_Y = HUD_HEIGHT + 44 // Türme
-const PALETTE_ROW2_Y = HUD_HEIGHT + 128 // Economy-Bauteile
-
-/** Erste Icon-Position, damit `count` Icons im Abstand `gap` symmetrisch um `width/2` zentriert
- * stehen (egal ob `count` gerade oder ungerade ist). */
-function centeredRowStartX(count: number, gap: number): number {
-  return width / 2 - ((count - 1) / 2) * gap
-}
+const PALETTE_GROUP_GAP = 48
+const PALETTE_ROW_Y = HUD_HEIGHT + 44
 
 function buildScene() {
   hudButtons = buildHudButtons(width)
   const economyCount = buildPalette(0, 0, PALETTE_GAP).length
-  paletteItems = buildPalette(centeredRowStartX(economyCount, PALETTE_GAP), PALETTE_ROW2_Y, PALETTE_GAP)
-  towerPaletteItems = buildTowerPalette(centeredRowStartX(TOWER_DEFINITIONS.length, PALETTE_GAP), PALETTE_ROW1_Y, PALETTE_GAP)
+  const startX = width / 2 - (economyCount - 0.5) * PALETTE_GAP - PALETTE_GROUP_GAP / 2
+  const towerStartX = width / 2 + PALETTE_GAP / 2 + PALETTE_GROUP_GAP / 2
+  paletteItems = buildPalette(startX, PALETTE_ROW_Y, PALETTE_GAP)
+  towerPaletteItems = buildTowerPalette(towerStartX, PALETTE_ROW_Y, PALETTE_GAP)
 }
 
 // Das gemeinsame Raster (User-Vorgabe: "Instead of having the split between economy and defense,
@@ -206,7 +210,10 @@ let lightSimulation: SimulationResult = { segments: [], prismStatus: new Map(), 
 // (siehe placementGrid.ts rowParity()), deren Verschiebung um eine halbe Spaltenbreite genau das
 // ausgleicht: col = cols/2 - 1 (ganzzahlig) landet an derselben Pixel-Position wie "Spalte 2.5" in
 // einer geraden Zeile — exakt die geometrische Mitte, unabhängig von der aktuellen Rasterbreite.
-let endpointDirection: HexDirection = 4 // zeigt zu Beginn ins Rasterinnere (nach unten)
+// User-Vorgabe: Standard-Abstrahlrichtung zeigt nach rechts statt links (die Startaufstellung
+// sitzt links im Raster, siehe buildWorld() — Richtung 4 hätte den Pfad direkt in den Cluster
+// hineinlaufen lassen, Richtung 5 führt stattdessen in die freie rechte Hälfte).
+let endpointDirection: HexDirection = 5
 
 function endpointNode(): GridCoord {
   return { col: placementGrid.cols / 2 - 1, row: -1 }
@@ -291,7 +298,7 @@ function canPlaceAt(cell: GridCoord): boolean {
 
 function buildWorld() {
   const cellSize = 34
-  placementGrid = { cols: 6, rows: 6, cellSize, originX: 0, originY: HUD_HEIGHT + 210 }
+  placementGrid = { cols: 6, rows: 6, cellSize, originX: 0, originY: HUD_HEIGHT + 120 }
   // User-Vorgabe: der Endpunkt-Stein soll exakt mit dem Kauf-Leisten-Trennstrich fluchten, beide
   // exakt bildschirmmittig — NICHT die Rasterbox selbst zentrieren (das wäre ein anderer Punkt,
   // siehe endpointNode()-Kommentar: `endpointX = originX + hexColumnWidth*cols/2`, aufgelöst nach
@@ -422,7 +429,16 @@ resize()
 canvas.addEventListener(
   'wheel',
   (e) => {
-    cameraOffsetY = Math.max(0, Math.min(maxScrollY(), cameraOffsetY + e.deltaY))
+    const pos = pointerPos(e)
+    const sidebar = leftSidebarListBounds()
+    // User-Vorgabe: Farb-Guide links soll ebenfalls scrollbar sein — übers Mausrad, exakt wie das
+    // Raster, nur mit eigenem Offset (leftSidebarScrollY) und nur, solange der Zeiger über der
+    // Seitenleiste steht; sonst wie gehabt das Raster scrollen (cameraOffsetY).
+    if (pos.x >= sidebar.x && pos.x <= sidebar.x + sidebar.width && pos.y >= sidebar.y && pos.y <= sidebar.y + sidebar.height) {
+      leftSidebarScrollY = Math.max(0, Math.min(leftSidebarMaxScroll, leftSidebarScrollY + e.deltaY))
+    } else {
+      cameraOffsetY = Math.max(0, Math.min(maxScrollY(), cameraOffsetY + e.deltaY))
+    }
     e.preventDefault()
   },
   { passive: false },
@@ -436,7 +452,7 @@ canvas.addEventListener(
 // fallen lassen (kostet Lumen) bzw. Raster erweitern (kostet Prisma, sofortige Aktion statt Drag).
 
 /** Bildschirm-Koordinaten (für HUD/Kauf-Leiste/Modals, die beim Scrollen fest stehen bleiben). */
-function pointerPos(e: PointerEvent): Point {
+function pointerPos(e: { clientX: number; clientY: number }): Point {
   const rect = canvas.getBoundingClientRect()
   return { x: e.clientX - rect.left, y: e.clientY - rect.top }
 }
@@ -825,6 +841,26 @@ function drawTowerPalette() {
   }
 }
 
+/** Feiner Trennstrich zwischen Economy- (Generatoren/Prisma/Mirror/Grid) und Turm-Hälfte der
+ * kombinierten Kauf-Leiste (User-Vorgabe: wieder wie früher) — mittig zwischen dem letzten
+ * Economy- und dem ersten Turm-Icon, exakt in der Bildschirmmitte (siehe buildScene()). Spannt
+ * etwas über die Kartenränder hinaus (Karten sind 30px über/44px unter `item.y`, siehe
+ * render/buildingRender.ts paletteCardBounds()). */
+function drawPaletteDivider() {
+  const lastEconomy = paletteItems[paletteItems.length - 1]
+  const firstTower = towerPaletteItems[0]
+  if (!lastEconomy || !firstTower) return
+  const x = (lastEconomy.x + lastEconomy.radius + (firstTower.x - firstTower.radius)) / 2
+  ctx!.save()
+  ctx!.strokeStyle = COLORS.gridLineStrong
+  ctx!.lineWidth = 1
+  ctx!.beginPath()
+  ctx!.moveTo(x, PALETTE_ROW_Y - 34)
+  ctx!.lineTo(x, PALETTE_ROW_Y + 48)
+  ctx!.stroke()
+  ctx!.restore()
+}
+
 /** Hover-Tooltip über einem Kauf-Leisten-Icon — Name + kurzer Zweck, siehe
  * paletteItemDescription()/towerPaletteItemDescription(). Nutzt denselben Chip-Look wie die
  * übrigen Panels (drawLabel(), aus shapes.ts). */
@@ -880,9 +916,31 @@ function drawTowers() {
       ctx!.save()
       ctx!.globalAlpha = INACTIVE_ALPHA
     }
-    drawTowerEntity(ctx!, tower, towerCenter(tower))
+    const center = towerCenter(tower)
+    drawTowerEntity(ctx!, tower, center)
+    drawTowerLevelRing(ctx!, tower, center)
     if (starved) ctx!.restore()
   }
+}
+
+/** Zelle des aktuell ausgewählten Gebäudes/Turms (siehe `infoTarget`), oder `null` — Mirror/Prisma
+ * haben nie ein `infoTarget` (siehe sellSelected()-Kommentar), daher hier nicht behandelt. */
+function selectedCell(): GridCoord | null {
+  if (!infoTarget) return null
+  if (infoTarget.kind === 'source') {
+    const source = lightSources.find((s) => s.id === infoTarget!.id)
+    return source ? { col: source.col, row: source.row } : null
+  }
+  const tower = towers.find((t) => t.id === infoTarget!.id)
+  return tower ? { col: tower.col, row: tower.row } : null
+}
+
+/** Roter Rahmen um die Zelle des ausgewählten Gebäudes/Turms (User-Vorgabe: "wenn ein Gebäude
+ * ausgewählt ist, soll der Rahmen rot markiert werden") — nach den Gebäuden/Türmen selbst
+ * gezeichnet, damit er sichtbar über ihnen liegt statt darunter verdeckt zu werden. */
+function drawSelectionHighlight() {
+  const cell = selectedCell()
+  if (cell) drawSelectedCellMarker(ctx!, placementGrid, cell)
 }
 
 interface LoadoutSummaryEntry {
@@ -924,28 +982,47 @@ const SIDE_PANEL_WIDTH = 260
 const SIDE_PANEL_MARGIN = 24
 const SIDE_PANEL_TOP = HUD_HEIGHT + 120
 
-const PRIMARY_COLORS = RESOURCES.filter((r) => r.tier === 1)
-const COLOR_COMBINATIONS = RESOURCES.filter((r) => r.tier !== 1 && r.tier !== 'special')
+const ALL_GUIDE_COLORS = RESOURCES.filter((r) => r.tier !== 'special')
 
-/** Linke Seitenleiste: Farb-Guide als Karten-Liste (User-Vorgabe, Referenzbild), zweigeteilt in
- * "Primary Colors" (Tier 1, gekauft statt gemischt) und "Color Combinations" (Tier 2-5) — keine
- * Turmregeln mehr ("brauche ich nicht"), der Farb-Guide hat dadurch den vollen Platz für sich. */
-function drawLeftSidebar() {
+// User-Vorgabe: "mach den Teil links... auch scrollbar" — der Farb-Guide ist mit allen 5 Tiers oft
+// höher als der verfügbare Platz (siehe drawColorGuideList()s eigene "Sicherheitsbremse", die
+// sonst einfach abschneidet). Eigenes Scroll-Offset + Mausrad-Handling (siehe canvas
+// 'wheel'-Listener), unabhängig von `cameraOffsetY` (das Raster scrollt separat, siehe dort).
+let leftSidebarScrollY = 0
+let leftSidebarMaxScroll = 0
+
+/** Bildschirm-Bounds des scrollbaren Farb-Guide-Bereichs (OHNE Titel/Unterzeile darüber) — sowohl
+ * fürs Zeichnen (drawLeftSidebar()) als auch fürs Mausrad-Hittesting (siehe 'wheel'-Listener)
+ * genutzt, damit beide garantiert dieselbe Fläche meinen. */
+function leftSidebarListBounds() {
   const x = Math.max(16, placementGrid.originX - SIDE_PANEL_MARGIN - SIDE_PANEL_WIDTH)
+  const y = SIDE_PANEL_TOP + 34
   const bottom = height - 20
-  drawColorGuideSidebarTitle(ctx!, x, SIDE_PANEL_TOP)
+  return { x, y, width: SIDE_PANEL_WIDTH, height: Math.max(0, bottom - y) }
+}
 
-  let y = SIDE_PANEL_TOP + 34
-  drawColorSectionHeader(ctx!, x, y, 'Primary Colors')
-  y += 12
-  y = drawColorGuideList(ctx!, x, y, SIDE_PANEL_WIDTH, Math.max(0, bottom - y), PRIMARY_COLORS)
+/** Linke Seitenleiste: Farb-Guide, tier-gruppiert (Trennlinie + Tier-Label zwischen jeder
+ * Tierklasse, User-Vorgabe), mit immer sichtbarer Rezept+Effekt-Beschreibung je Farbe (User-
+ * Vorgabe: "ich will weiter die Beschreibung... links beschrieben haben") — keine Turmregeln mehr
+ * ("brauche ich nicht"), der Farb-Guide hat dadurch den vollen Platz für sich. Jetzt scrollbar
+ * (User-Vorgabe): eigener Clip-Bereich + `leftSidebarScrollY`-Versatz. `drawColorGuideList()`
+ * bekommt bewusst eine praktisch unbegrenzte Höhe übergeben, damit SIE nicht mehr selbst
+ * abschneidet — die eigentliche Begrenzung übernimmt der ctx-Clip hier, die zurückgegebene
+ * Gesamthöhe dient nur noch der Scroll-Obergrenze. */
+function drawLeftSidebar() {
+  const bounds = leftSidebarListBounds()
+  drawColorGuideSidebarTitle(ctx!, bounds.x, SIDE_PANEL_TOP)
 
-  if (y < bottom) {
-    y += 8
-    drawColorSectionHeader(ctx!, x, y, 'Color Combinations')
-    y += 12
-    drawColorGuideList(ctx!, x, y, SIDE_PANEL_WIDTH, Math.max(0, bottom - y), COLOR_COMBINATIONS)
-  }
+  ctx!.save()
+  ctx!.beginPath()
+  ctx!.rect(bounds.x, bounds.y, bounds.width, bounds.height)
+  ctx!.clip()
+  ctx!.translate(0, -leftSidebarScrollY)
+  const contentBottom = drawColorGuideList(ctx!, bounds.x, bounds.y, bounds.width, 100000, ALL_GUIDE_COLORS)
+  ctx!.restore()
+
+  leftSidebarMaxScroll = Math.max(0, contentBottom - bounds.y - bounds.height)
+  leftSidebarScrollY = Math.min(leftSidebarScrollY, leftSidebarMaxScroll)
 }
 
 const CARD_PADDING = 14
@@ -1073,6 +1150,37 @@ function drawTowerDamageCard(x: number, y: number, entries: LoadoutSummaryEntry[
 
 const SIDEBAR_BUTTON_HEIGHT = 30
 
+/** "UPGRADE (10⚡)" als eine um `centerX` zentrierte Gruppe aus Text+Preis+Währungssymbol —
+ * render/ui.ts drawCostTag()/drawCenteredCostTag() sind selbst linksbündig (reiner Kosten-Text
+ * ohne umgebendes Label), deshalb hier von Hand zusammengesetzt. Erwartet aktives
+ * `textBaseline = 'middle'` (so wie im Aufrufer gesetzt) — `y` ist daher die TEXT-Mitte, nicht
+ * die Baseline, weshalb das Symbol (anders als in drawCostTag) ohne vertikalen Offset auf `y`
+ * zentriert wird. */
+function drawUpgradeCostLabel(ctx: CanvasRenderingContext2D, centerX: number, y: number, cost: number, color: string) {
+  const prefix = 'UPGRADE ('
+  const suffix = ')'
+  const costText = `${cost}`
+  const fontSize = 11
+  const iconRadius = fontSize * 0.4
+  const gap = 5
+  ctx.save()
+  ctx.textAlign = 'left'
+  const prefixWidth = ctx.measureText(prefix).width
+  const costWidth = ctx.measureText(costText).width
+  const suffixWidth = ctx.measureText(suffix).width
+  const totalWidth = prefixWidth + costWidth + gap + iconRadius * 2 + suffixWidth
+  let cursor = centerX - totalWidth / 2
+  ctx.fillStyle = color
+  ctx.fillText(prefix, cursor, y)
+  cursor += prefixWidth
+  ctx.fillText(costText, cursor, y)
+  cursor += costWidth + gap
+  drawCurrencyIcon(ctx, cursor + iconRadius, y, 'lumen', color, iconRadius)
+  cursor += iconRadius * 2
+  ctx.fillText(suffix, cursor, y)
+  ctx.restore()
+}
+
 /** "SELECTED"-Karte: Name + Kennzahlen des ausgewählten Gebäudes/Turms (siehe selectedRows()),
  * plus UPGRADE/SELL-Knöpfe. Baut `sidebarButtons` neu auf (pointerdown hittestet dagegen) — leert
  * es zuerst, damit nach einem Deselect keine toten Knöpfe hängen bleiben. */
@@ -1117,7 +1225,7 @@ function drawSelectedCard(x: number, y: number) {
   cursorY += 10
   const buttonGap = 8
   const buttonWidth = (SIDE_PANEL_WIDTH - CARD_PADDING * 2 - buttonGap) / 2
-  const canUpgrade = selected.rows.some((r) => r.action === 'level')
+  const canUpgrade = selected.upgradeCost !== null
 
   const upgradeButton = { id: 'upgrade' as const, x: x + CARD_PADDING, y: cursorY, width: buttonWidth, height: SIDEBAR_BUTTON_HEIGHT }
   const sellButton = { id: 'sell' as const, x: upgradeButton.x + buttonWidth + buttonGap, y: cursorY, width: buttonWidth, height: SIDEBAR_BUTTON_HEIGHT }
@@ -1126,11 +1234,20 @@ function drawSelectedCard(x: number, y: number) {
   ctx!.save()
   ctx!.textAlign = 'center'
   ctx!.textBaseline = 'middle'
-  ctx!.font = '12px monospace'
+  ctx!.font = '11px monospace'
 
   drawCard(ctx!, upgradeButton.x, upgradeButton.y, upgradeButton.width, upgradeButton.height, canUpgrade)
-  ctx!.fillStyle = canUpgrade ? COLORS.accent : COLORS.textDim
-  ctx!.fillText('UPGRADE', upgradeButton.x + upgradeButton.width / 2, upgradeButton.y + upgradeButton.height / 2 + 1)
+  const upgradeTextColor = canUpgrade ? COLORS.accent : COLORS.textDim
+  const upgradeCenterX = upgradeButton.x + upgradeButton.width / 2
+  const upgradeTextY = upgradeButton.y + upgradeButton.height / 2 + 1
+  // User-Vorgabe: der Preis soll direkt auf dem Knopf stehen (nicht nur in der Level-Zeile), UND
+  // jetzt auch mit Währungssymbol (siehe drawUpgradeCostLabel()) — bei MAX-Level gibt es keinen
+  // Preis, daher nur der Klartext ohne Symbol.
+  if (canUpgrade) drawUpgradeCostLabel(ctx!, upgradeCenterX, upgradeTextY, selected.upgradeCost!, upgradeTextColor)
+  else {
+    ctx!.fillStyle = upgradeTextColor
+    ctx!.fillText('UPGRADE (MAX)', upgradeCenterX, upgradeTextY)
+  }
 
   drawCard(ctx!, sellButton.x, sellButton.y, sellButton.width, sellButton.height)
   ctx!.fillStyle = '#ff3355'
@@ -1178,19 +1295,23 @@ interface SelectedRow {
 
 /** Name + Kennzahlen für die "SELECTED"-Karte der rechten Seitenleiste (siehe drawRightSidebar())
  * — dieselben Felder wie das frühere schwebende Info-Panel, nur ohne Layout/Zeichnen (das
- * übernimmt jetzt die Seitenleiste). Gibt `null` zurück, wenn das Ziel inzwischen weg ist (z. B.
- * gerade abgerissen) — Aufrufer räumt dann `infoTarget` auf. */
-function selectedRows(target: InfoTarget): { title: string; rows: SelectedRow[] } | null {
+ * übernimmt jetzt die Seitenleiste). `upgradeCost` (null, wenn schon Max-Level) lässt den
+ * UPGRADE-Knopf seinen Preis direkt anzeigen (User-Vorgabe), statt ihn nur in der Level-Zeile zu
+ * verstecken. Gibt `null` zurück, wenn das Ziel inzwischen weg ist (z. B. gerade abgerissen) —
+ * Aufrufer räumt dann `infoTarget` auf. */
+function selectedRows(target: InfoTarget): { title: string; rows: SelectedRow[]; upgradeCost: number | null } | null {
   if (target.kind === 'source') {
     const source = lightSources.find((s) => s.id === target.id)
     if (!source) return null
     const active = lightSimulation.activeSourceIds.has(source.id)
     const maxed = source.level >= GENERATOR_MAX_LEVEL
+    const upgradeCost = maxed ? null : generatorUpgradeCost(source.level + 1)
     return {
       title: 'Light Source',
+      upgradeCost,
       rows: [
         { label: 'Color', value: getResource(source.resourceId).name },
-        { label: 'Level', value: maxed ? `${source.level}/${GENERATOR_MAX_LEVEL} (max)` : `${source.level}/${GENERATOR_MAX_LEVEL} (Lv.${source.level + 1}: ${generatorUpgradeCost(source.level + 1)} lumen)`, action: maxed ? undefined : 'level' },
+        { label: 'Level', value: maxed ? `${source.level}/${GENERATOR_MAX_LEVEL} (max)` : `${source.level}/${GENERATOR_MAX_LEVEL} (Lv.${source.level + 1})`, action: maxed ? undefined : 'level' },
         { label: 'Range', value: `${source.range} cells` },
         { label: 'Status', value: active ? 'Delivering' : 'Idle (no tower in range)' },
       ],
@@ -1203,13 +1324,15 @@ function selectedRows(target: InfoTarget): { title: string; rows: SelectedRow[] 
   const ammo = lightSimulation.towerAmmo.get(tower.id)
   const ammoLabel = tower.resourceId ? `${getResource(tower.resourceId).name} (strength ${ammo?.strength ?? 0})` : '— (not connected)'
   const maxed = tower.level >= TOWER_MAX_LEVEL
+  const upgradeCost = maxed ? null : towerUpgradeCost(def, tower.level + 1)
   return {
     title: def.name,
+    upgradeCost,
     rows: [
       { label: 'Ammo', value: tower.resourceId && !hasAmmoAvailable(tower) ? `${ammoLabel} (Shortage!)` : ammoLabel },
-      { label: 'Level', value: maxed ? `${tower.level}/${TOWER_MAX_LEVEL} (max)` : `${tower.level}/${TOWER_MAX_LEVEL} (next: ${towerUpgradeCost(def, tower.level + 1)} lumen)`, action: maxed ? undefined : 'level' },
+      { label: 'Level', value: maxed ? `${tower.level}/${TOWER_MAX_LEVEL} (max)` : `${tower.level}/${TOWER_MAX_LEVEL}`, action: maxed ? undefined : 'level' },
       { label: 'Damage', value: stats.damage.toFixed(1) },
-      { label: 'Range', value: `${stats.range.toFixed(0)}px` },
+      { label: 'Range', value: `${(stats.range / hexColumnWidth(placementGrid)).toFixed(1)} cells` },
       { label: 'Attack Speed', value: `${(1 / stats.fireInterval).toFixed(2)}/s` },
       { label: 'Projectile Speed', value: stats.projectileSpeed ? `${stats.projectileSpeed.toFixed(0)}px/s` : '—' },
       { label: 'Consumption', value: `${stats.consumption.toFixed(1)}/s` },
@@ -1430,6 +1553,7 @@ function render(_dt: number) {
   ctx!.translate(0, -cameraOffsetY)
   drawWorld()
   drawTowers()
+  drawSelectionHighlight()
   drawTowerCombatEffects(ctx!, towers, enemies, enemyPathPixels, towerCenter)
   drawTowerPlacementPreview()
   drawEnemies(ctx!, enemies, enemyPathPixels, elapsedSeconds)
@@ -1439,6 +1563,7 @@ function render(_dt: number) {
 
   drawEconomyPalette()
   drawTowerPalette()
+  drawPaletteDivider()
   drawPaletteTooltips()
   drawLeftSidebar()
   drawRightSidebar()

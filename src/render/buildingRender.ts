@@ -8,7 +8,7 @@ import { GENERATOR_MAX_LEVEL, type LightSource, type Mirror, type MirrorOrientat
 import type { BeamSegment, PrismStatus } from '../economy/lightSimulation'
 import { cellCenter, GRID_EXPAND_COST, type GridCoord, type HexDirection, type PlacementGrid } from '../grid/placementGrid'
 import { drawCircle, drawCircleOutline, drawHexagon, drawHexagonOutline, drawTriangle, drawTriangleOutline, strokeRoundedPolyline } from './shapes'
-import { drawCard } from './ui'
+import { drawCard, drawCenteredCostTag } from './ui'
 
 /** Pixel-Winkel (Grad) der 6 Hex-Richtungen — deckungsgleich mit den Nachbar-Deltas in
  * grid/placementGrid.ts (gerade Zeile), fürs Platzieren von Anschluss-Punkten/Spiegel-Linien. */
@@ -60,6 +60,33 @@ export function drawMaxLevelCellMarker(ctx: CanvasRenderingContext2D, grid: Plac
   ctx.shadowColor = MAX_LEVEL_COLOR
   ctx.shadowBlur = 6
   ctx.lineWidth = 2
+  ctx.stroke()
+  ctx.restore()
+}
+
+/** Roter Rahmen um die Rasterzelle des aktuell ausgewählten Gebäudes/Turms (User-Vorgabe: "wenn
+ * eine Zelle bzw. ein Gebäude ausgewählt ist, soll der Rahmen rot markiert werden") — reine Kontur
+ * ohne Füllung (anders als drawMaxLevelCellMarker()), damit sie sich klar von dessen goldenem
+ * Status-Marker unterscheidet und über der Bau-Grafik gezeichnet werden kann, ohne sie zu
+ * verdecken. main.ts ruft sie NACH allen Gebäuden/Türmen auf, solange `infoTarget` gesetzt ist. */
+export const SELECTED_CELL_COLOR = '#ff3355'
+
+export function drawSelectedCellMarker(ctx: CanvasRenderingContext2D, grid: PlacementGrid, cell: GridCoord) {
+  const { x, y } = cellCenter(grid, cell)
+  ctx.save()
+  ctx.beginPath()
+  for (let i = 0; i < 6; i++) {
+    const angle = (Math.PI / 180) * (60 * i - 90)
+    const px = x + grid.cellSize * Math.cos(angle)
+    const py = y + grid.cellSize * Math.sin(angle)
+    if (i === 0) ctx.moveTo(px, py)
+    else ctx.lineTo(px, py)
+  }
+  ctx.closePath()
+  ctx.strokeStyle = SELECTED_CELL_COLOR
+  ctx.shadowColor = SELECTED_CELL_COLOR
+  ctx.shadowBlur = 8
+  ctx.lineWidth = 2.5
   ctx.stroke()
   ctx.restore()
 }
@@ -444,6 +471,7 @@ export function drawPaletteItem(ctx: CanvasRenderingContext2D, item: PaletteItem
   }
 
   ctx.textAlign = 'center'
+  ctx.font = '11px monospace'
   if (item.name) {
     // Nur `expand-grid` hat einen Namen (siehe PaletteItem-Kommentar) — zweizeiliges Label wie
     // bei den Turm-/Info-Icons (towerRender.ts drawTowerPaletteItem()), statt der sonst hier
@@ -451,13 +479,10 @@ export function drawPaletteItem(ctx: CanvasRenderingContext2D, item: PaletteItem
     ctx.fillStyle = '#9aa0ab'
     ctx.font = '10px monospace'
     ctx.fillText(item.name, item.x, item.y + item.radius + 14)
-    ctx.fillStyle = getResource(item.costResourceId).color
     ctx.font = '11px monospace'
-    ctx.fillText(`${item.cost}`, item.x, item.y + item.radius + 26)
+    drawCenteredCostTag(ctx, item.x, item.y + item.radius + 26, item.cost, item.costResourceId, getResource(item.costResourceId).color)
   } else {
-    ctx.fillStyle = getResource(item.costResourceId).color
-    ctx.font = '11px monospace'
-    ctx.fillText(`${item.cost}`, item.x, item.y + item.radius + 16)
+    drawCenteredCostTag(ctx, item.x, item.y + item.radius + 16, item.cost, item.costResourceId, getResource(item.costResourceId).color)
   }
   ctx.restore()
 }

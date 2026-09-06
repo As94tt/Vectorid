@@ -158,18 +158,39 @@ function drawRecipeIcon(ctx: CanvasRenderingContext2D, icon: RecipeEntry['icon']
   else drawHexagonOutline(ctx, x, cy, 3.6, COLORS.textMid, 1.2)
 }
 
-const COLOR_CARD_GAP = 8
-const COLOR_CARD_PADDING = 10
-const COLOR_CARD_ACCENT_WIDTH = 3
+const TIER_HEADER_HEIGHT = 20
+const DETAIL_CARD_GAP = 8
+const DETAIL_CARD_PADDING = 10
+const DETAIL_CARD_ACCENT_WIDTH = 3
+const DETAIL_LINE_HEIGHT = 14
+const TIER_GROUP_GAP = 14
 
-/** Inhalt des Farb-Guide — EINE Karte je Farbe (User-Vorgabe: Referenzbild-Karten-Look), farbiger
- * Akzentstreifen links = Ressourcenfarbe, für Tier 3/4 BEIDE Rezept-Varianten (Dreieck UND
- * Hexagon) übereinander (User-Vorgabe: "beide varianten für t3 und t4 farben sollen angezeigt
- * werden"). main.ts ruft sie direkt in der immer sichtbaren Seitenleiste links vom Raster auf
- * (User-Vorgabe: "nicht mehr als öffnenbares Popup, sondern immer"), einmal je Sektion (Primary/
- * Combinations). `x`/`y`/`width`/`height` begrenzen nur den verfügbaren Platz — bricht sauber ab
- * (kein Scrollen), sobald `height` erreicht ist. Gibt die Y-Position nach der letzten Karte
- * zurück, damit main.ts die nächste Sektion direkt darunter anschließen kann. */
+/** "TIER N ------" — Label und Trennstrich in derselben Zeile (User-Vorgabe), Strich füllt den
+ * Rest von `width` nach dem Label. */
+function drawTierHeader(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, tier: ResourceDefinition['tier']) {
+  ctx.save()
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'middle'
+  ctx.fillStyle = COLORS.textDim
+  ctx.font = 'bold 11px monospace'
+  const label = `TIER ${tier}`
+  ctx.fillText(label, x, y)
+  const labelWidth = ctx.measureText(label).width
+  ctx.strokeStyle = COLORS.gridLineStrong
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  ctx.moveTo(x + labelWidth + 8, y)
+  ctx.lineTo(x + width, y)
+  ctx.stroke()
+  ctx.restore()
+}
+
+/** Farb-Guide: je Tier eine Kopfzeile (Trennstrich + "TIER N", User-Vorgabe), darunter — je Farbe
+ * — eine volle Detail-Karte mit Rezept(en) + Effekt (User-Vorgabe: "ich will weiter die
+ * Beschreibung... links beschrieben haben" — die kompakte Chip-Reihe aus einer früheren Runde
+ * wollte der User NICHT: "ich brauche nicht die extra Reihe von nur den Farben"). `x`/`y`/`width`/
+ * `height` begrenzen nur den verfügbaren Platz — bricht sauber ab (kein Scrollen), sobald `height`
+ * erreicht ist. Gibt die Y-Position nach der letzten Karte zurück. */
 export function drawColorGuideList(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -178,65 +199,83 @@ export function drawColorGuideList(
   height: number,
   resourceList: ResourceDefinition[] = RESOURCES.filter((r) => r.tier !== 'special'),
 ): number {
-  const lineHeight = 14
-  let cursorY = y
+  const tiers = new Map<ResourceDefinition['tier'], ResourceDefinition[]>()
+  for (const r of resourceList) {
+    if (!tiers.has(r.tier)) tiers.set(r.tier, [])
+    tiers.get(r.tier)!.push(r)
+  }
 
+  let cursorY = y
   ctx.save()
   ctx.textAlign = 'left'
 
-  for (const resource of resourceList) {
-    const effect = COLOR_EFFECT_INFO[resource.id]
-    const showBoth = resource.tier === 3 || resource.tier === 4
-    const recipeEntries = showBoth
-      ? [triangleRecipeEntry(resource), hexagonRecipeEntry(resource)].filter((r): r is RecipeEntry => !!r)
-      : [triangleRecipeEntry(resource) ?? hexagonRecipeEntry(resource)].filter((r): r is RecipeEntry => !!r)
+  tierLoop: for (const [tier, list] of tiers) {
+    if (cursorY + TIER_HEADER_HEIGHT > y + height) break
+    drawTierHeader(ctx, x, cursorY + 10, width, tier)
+    cursorY += TIER_HEADER_HEIGHT + 8
 
-    // Höhe erst BERECHNEN (braucht die fertig umgebrochenen Effekt-Zeilen), dann die Karte
-    // zeichnen, dann den Inhalt darüber — sonst wüsste die Karte ihre eigene Höhe nicht im Voraus.
-    ctx.font = '10px monospace'
-    const effectLines = effect ? wrapLines(ctx, `${effect.name}: ${effect.description}`, width - COLOR_CARD_PADDING * 2 - 12, 2) : []
-    const recipeLineCount = recipeEntries.length === 0 ? 1 : recipeEntries.length
-    const contentLines = recipeLineCount + effectLines.length
-    const cardHeight = COLOR_CARD_PADDING * 2 + 16 + contentLines * lineHeight
+    for (const resource of list) {
+      const effect = COLOR_EFFECT_INFO[resource.id]
+      // User-Vorgabe: Black/White sollen im Guide auftauchen (Name + Effekt sichtbar, "der Spieler
+      // soll wissen, dass es sie gibt"), aber ihr Rezept bleibt geheim ("nicht, wie sie
+      // zusammengesetzt werden") — ein einzelner "???"-Platzhalter statt der echten Zutaten-Liste.
+      const showBoth = resource.tier === 3 || resource.tier === 4
+      const recipeEntries: RecipeEntry[] =
+        resource.tier === 5
+          ? [{ icon: 'hexagon', text: '???' }]
+          : showBoth
+            ? [triangleRecipeEntry(resource), hexagonRecipeEntry(resource)].filter((r): r is RecipeEntry => !!r)
+            : [triangleRecipeEntry(resource) ?? hexagonRecipeEntry(resource)].filter((r): r is RecipeEntry => !!r)
 
-    if (cursorY + cardHeight > y + height) break // Sicherheitsbremse, sollte bei normaler Fenstergröße nie greifen
+      // Höhe erst BERECHNEN (braucht die fertig umgebrochenen Effekt-Zeilen), dann die Karte
+      // zeichnen, dann den Inhalt darüber — sonst wüsste die Karte ihre eigene Höhe nicht im Voraus.
+      ctx.font = '10px monospace'
+      const effectLines = effect ? wrapLines(ctx, `${effect.name}: ${effect.description}`, width - DETAIL_CARD_PADDING * 2 - 12, 2) : []
+      const recipeLineCount = recipeEntries.length === 0 ? 1 : recipeEntries.length
+      const contentLines = recipeLineCount + effectLines.length
+      const cardHeight = DETAIL_CARD_PADDING * 2 + 16 + contentLines * DETAIL_LINE_HEIGHT
 
-    drawCard(ctx, x, cursorY, width, cardHeight)
-    ctx.fillStyle = resource.color
-    ctx.fillRect(x, cursorY, COLOR_CARD_ACCENT_WIDTH, cardHeight)
+      if (cursorY + cardHeight > y + height) break tierLoop // Sicherheitsbremse, sollte bei normaler Fenstergröße nie greifen
 
-    const textX = x + COLOR_CARD_PADDING + 10
-    const swatchX = x + COLOR_CARD_PADDING + 3
-    let lineY = cursorY + COLOR_CARD_PADDING + 8
+      drawCard(ctx, x, cursorY, width, cardHeight)
+      ctx.fillStyle = resource.color
+      ctx.fillRect(x, cursorY, DETAIL_CARD_ACCENT_WIDTH, cardHeight)
 
-    drawCircle(ctx, swatchX, lineY - 3, 6, resource.color, 6)
-    drawCircleOutline(ctx, swatchX, lineY - 3, 6, COLORS.gridLineStrong, 1, 0)
-    ctx.fillStyle = readableTextColor(resource.color)
-    ctx.font = 'bold 12px monospace'
-    ctx.fillText(resource.name, textX, lineY)
-    lineY += lineHeight
+      const textX = x + DETAIL_CARD_PADDING + 10
+      const swatchX = x + DETAIL_CARD_PADDING + 3
+      let lineY = cursorY + DETAIL_CARD_PADDING + 8
 
-    ctx.font = '10px monospace'
-    if (recipeEntries.length === 0) {
-      ctx.fillStyle = COLORS.textDim
-      ctx.fillText('Purchased', textX, lineY)
-      lineY += lineHeight
-    } else {
-      for (const entry of recipeEntries) {
-        drawRecipeIcon(ctx, entry.icon, swatchX, lineY)
-        ctx.fillStyle = COLORS.textMid
-        ctx.fillText(entry.text, textX, lineY)
-        lineY += lineHeight
+      drawCircle(ctx, swatchX, lineY - 3, 6, resource.color, 6)
+      drawCircleOutline(ctx, swatchX, lineY - 3, 6, COLORS.gridLineStrong, 1, 0)
+      ctx.fillStyle = readableTextColor(resource.color)
+      ctx.font = 'bold 12px monospace'
+      ctx.fillText(resource.name, textX, lineY)
+      lineY += DETAIL_LINE_HEIGHT
+
+      ctx.font = '10px monospace'
+      if (recipeEntries.length === 0) {
+        ctx.fillStyle = COLORS.textDim
+        ctx.fillText('Purchased', textX, lineY)
+        lineY += DETAIL_LINE_HEIGHT
+      } else {
+        for (const entry of recipeEntries) {
+          drawRecipeIcon(ctx, entry.icon, swatchX, lineY)
+          ctx.fillStyle = COLORS.textMid
+          ctx.fillText(entry.text, textX, lineY)
+          lineY += DETAIL_LINE_HEIGHT
+        }
       }
+
+      ctx.fillStyle = COLORS.textMid
+      for (const line of effectLines) {
+        ctx.fillText(line, textX, lineY)
+        lineY += DETAIL_LINE_HEIGHT
+      }
+
+      cursorY += cardHeight + DETAIL_CARD_GAP
     }
 
-    ctx.fillStyle = COLORS.textMid
-    for (const line of effectLines) {
-      ctx.fillText(line, textX, lineY)
-      lineY += lineHeight
-    }
-
-    cursorY += cardHeight + COLOR_CARD_GAP
+    cursorY += TIER_GROUP_GAP - DETAIL_CARD_GAP
   }
 
   ctx.restore()
@@ -244,8 +283,8 @@ export function drawColorGuideList(
 }
 
 /** Kopf der Farb-Guide-Seitenleiste (User-Vorgabe, Referenzbild: Titel + kurze Unterzeile) — die
- * beiden Abschnitte darunter (Primary/Combinations) bekommen ihre eigene, kleinere Überschrift
- * (siehe drawColorSectionHeader()), die Listen selbst sind drawColorGuideList()-Aufrufe. */
+ * Tier-Gruppen darunter bekommen ihre eigene Kopfzeile (siehe drawTierHeader(), innerhalb
+ * drawColorGuideList()). */
 export function drawColorGuideSidebarTitle(ctx: CanvasRenderingContext2D, x: number, y: number) {
   ctx.save()
   ctx.textAlign = 'left'
@@ -255,17 +294,6 @@ export function drawColorGuideSidebarTitle(ctx: CanvasRenderingContext2D, x: num
   ctx.fillStyle = COLORS.textDim
   ctx.font = '11px monospace'
   ctx.fillText('Combine colors to create powerful towers', x, y + 18)
-  ctx.restore()
-}
-
-/** Kleine Abschnitts-Überschrift innerhalb der Farb-Guide-Seitenleiste ("PRIMARY COLORS" /
- * "COLOR COMBINATIONS", siehe main.ts drawLeftSidebar()). */
-export function drawColorSectionHeader(ctx: CanvasRenderingContext2D, x: number, y: number, label: string) {
-  ctx.save()
-  ctx.textAlign = 'left'
-  ctx.fillStyle = COLORS.textDim
-  ctx.font = 'bold 11px monospace'
-  ctx.fillText(label.toUpperCase(), x, y)
   ctx.restore()
 }
 

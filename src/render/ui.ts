@@ -66,6 +66,63 @@ export function healthFractionColor(fraction: number): string {
   return fraction > 0.5 ? '#39ff8f' : fraction > 0.25 ? '#ffcc33' : '#ff3355'
 }
 
+/** Kreis (Lumen) oder Dreieck (Prisma) als kleines Währungs-Symbol (User-Vorgabe: "damit eine
+ * visuelle Unterscheidung besser einsehbar ist im Vergleich zu Lumen") — dieselbe Form überall,
+ * wo eine der beiden Spezial-Währungen als Icon auftaucht (HUD-Kopfzeile, Kosten-Beträge, siehe
+ * drawCostTag() unten). Für alles andere (Kampf-/Mischfarben) einfach nicht aufrufen — die haben
+ * kein eigenes Symbol. */
+export function drawCurrencyIcon(ctx: CanvasRenderingContext2D, x: number, y: number, resourceId: string, color: string, radius = 5) {
+  ctx.save()
+  ctx.fillStyle = color
+  ctx.beginPath()
+  if (resourceId === 'prisma') {
+    ctx.moveTo(x, y - radius)
+    ctx.lineTo(x + radius * 0.87, y + radius * 0.5)
+    ctx.lineTo(x - radius * 0.87, y + radius * 0.5)
+    ctx.closePath()
+  } else {
+    ctx.arc(x, y, radius, 0, Math.PI * 2)
+  }
+  ctx.fill()
+  ctx.restore()
+}
+
+/** Zeichnet "<Zahl>" + Währungs-Symbol (drawCurrencyIcon()) LINKSBÜNDIG ab `x` (Text-Baseline
+ * `y`, immer 'alphabetic' — unabhängig vom aktuell aktiven ctx.textBaseline, damit die
+ * Symbol-Position vorhersagbar bleibt). `ctx.font` muss VOR dem Aufruf gesetzt sein (Messung +
+ * Symbolgröße richten sich danach). Gibt die verbrauchte Breite zurück, damit Aufrufer weiteren
+ * Text direkt anschließen können (siehe main.ts UPGRADE-Knopf: "UPGRADE (" + Kosten-Tag + ")"). */
+export function drawCostTag(ctx: CanvasRenderingContext2D, x: number, y: number, cost: number, resourceId: string, color: string): number {
+  const text = `${cost}`
+  const textWidth = ctx.measureText(text).width
+  const fontSize = Number(/(\d+)px/.exec(ctx.font)?.[1] ?? 11)
+  const iconRadius = fontSize * 0.4
+  const gap = 5
+
+  ctx.save()
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'alphabetic'
+  ctx.fillStyle = color
+  ctx.fillText(text, x, y)
+  ctx.restore()
+
+  drawCurrencyIcon(ctx, x + textWidth + gap + iconRadius, y - fontSize * 0.32, resourceId, color, iconRadius)
+  return textWidth + gap + iconRadius * 2
+}
+
+/** Wie drawCostTag(), aber horizontal um `centerX` zentriert statt linksbündig ab `x` — für
+ * Kauf-Leisten-Karten (User-Vorgabe: "überall wo die Kosten stehen... soll auch das Symbol der
+ * Währung dahinter sein"), deren Kosten-Zeile unter einem zentrierten Icon steht. */
+export function drawCenteredCostTag(ctx: CanvasRenderingContext2D, centerX: number, y: number, cost: number, resourceId: string, color: string) {
+  const text = `${cost}`
+  const textWidth = ctx.measureText(text).width
+  const fontSize = Number(/(\d+)px/.exec(ctx.font)?.[1] ?? 11)
+  const iconRadius = fontSize * 0.4
+  const gap = 5
+  const totalWidth = textWidth + gap + iconRadius * 2
+  drawCostTag(ctx, centerX - totalWidth / 2, y, cost, resourceId, color)
+}
+
 type IconDrawer = (ctx: CanvasRenderingContext2D, x: number, y: number, size: number, color: string) => void
 
 /** Speichern (Diskette): Außenrahmen + gefalzte Ecke oben rechts + kleiner "Label"-Balken. */
