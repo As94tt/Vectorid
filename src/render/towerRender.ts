@@ -1,7 +1,6 @@
 import { COLORS } from '../constants/colors'
 import { getResource } from '../data/resources'
 import { defaultTowerRotation, getTowerDefinition, TOWER_DEFINITIONS, TOWER_MAX_LEVEL, type PlacedTower, type TowerKind } from '../towerdefense/towers'
-import { MAX_LEVEL_COLOR } from './buildingRender'
 import { drawCircle, drawHalfCircle, drawHexagon, drawPentagon, drawSquare, drawStar, drawTriangle } from './shapes'
 import { drawCard, drawCenteredCostTag } from './ui'
 
@@ -69,10 +68,10 @@ function activeLevelPips(level: number): number {
  * Segmente auf einer Kreisbahn knapp außerhalb des Turm-Icons, beginnend oben (12 Uhr) im
  * Uhrzeigersinn. Aktive Segmente (siehe activeLevelPips()) leuchten in der aktuellen Munitions-
  * farbe (bzw. grau ohne Munition — dieselbe Farblogik wie drawTowerEntity()), inaktive bleiben
- * dunkle Konturpunkte. Bei Max-Level (alle 5 aktiv) kommt zusätzlich ein voll goldener Ring um
- * das Turm-Icon selbst dazu ("der Turmrand wird vollständig gold", User-Vorgabe) — unabhängig von
- * der Munitionsfarbe, dieselbe MAX_LEVEL_COLOR wie beim Generator-Marker (buildingRender.ts
- * drawMaxLevelCellMarker()). */
+ * dunkle Konturpunkte. Der Max-Level-Hinweis selbst (goldener Rahmen) sitzt NICHT hier, sondern
+ * — wie bei Economy-Gebäuden — auf dem Rasterfeld dahinter (User-Vorgabe: "wie economy Gebäude
+ * auch, als das Grid-Feld dahinter, nicht wie jetzt als Kreis um den Turm"), siehe main.ts
+ * drawWorld() + buildingRender.ts drawMaxLevelCellMarker(). */
 export function drawTowerLevelRing(ctx: CanvasRenderingContext2D, tower: PlacedTower, center: { x: number; y: number }) {
   const color = tower.resourceId ? getResource(tower.resourceId).color : TOWER_UNSELECTED_COLOR
   const active = activeLevelPips(tower.level)
@@ -94,18 +93,6 @@ export function drawTowerLevelRing(ctx: CanvasRenderingContext2D, tower: PlacedT
       ctx.lineWidth = 1
       ctx.stroke()
     }
-    ctx.restore()
-  }
-
-  if (tower.level >= TOWER_MAX_LEVEL) {
-    ctx.save()
-    ctx.strokeStyle = MAX_LEVEL_COLOR
-    ctx.shadowColor = MAX_LEVEL_COLOR
-    ctx.shadowBlur = 8
-    ctx.lineWidth = 2
-    ctx.beginPath()
-    ctx.arc(center.x, center.y, TOWER_ICON_SIZE + 4, 0, Math.PI * 2)
-    ctx.stroke()
     ctx.restore()
   }
 }

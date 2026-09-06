@@ -220,6 +220,10 @@ interface Front {
   color: string
   isRawSource: boolean
   sourceId?: string
+  /** Nur gesetzt bei einem von einem aufgelösten Prisma ausgestrahlten Front (Gegenstück zu
+   * `sourceId`) — welches Prisma diesen Strahl abgeschickt hat, fürs transitive "erreicht diese
+   * Kette am Ende einen Turm"-Tracking (siehe `simulateLight()` activeSourceIds). */
+  prismId?: string
   /** Wie viele weitere Zellen dieser Strahl noch zurücklegen kann — sinkt mit jedem Schritt um 1.
    * Das ist zugleich seine "Stärke" (User-Vorgabe): kommt er bei einem Turm oder Prisma an, ist
    * der dort gerade noch übrige Wert (NACH dem letzten Schritt) genau die Menge, die
@@ -369,7 +373,20 @@ interface TracePass {
   /** Turm-Id -> Farbe + Stärke des ERSTEN Strahls, der ihn in diesem Durchlauf erreicht hat (siehe
    * `simulateLight()`-Dateikommentar zu "erster gewinnt" bei mehrfarbigen Treffern). */
   towerHits: Map<string, { resourceId: string; strength: number }>
+  /** Direkt trifft (nicht transitiv) — nur Quellen, deren Strahl SELBST einen Turm erreicht hat. */
   activeSourceIds: Set<string>
+  /** Direkt-Eingänge je Prisma in DIESEM Durchlauf — welche rohen Lichtquellen bzw. welche ANDEREN
+   * Prismen gerade unmittelbar hineinstrahlen. Da ein einmal aufgelöstes Prisma ab dann in JEDEM
+   * weiteren Durchlauf mitstrahlt (monotone Sperre, siehe Datei-Kommentar), ist der LETZTE
+   * Durchlauf ein vollständiger, stabiler Schnappschuss des gesamten Netzwerks — `simulateLight()`
+   * verfolgt diese Kanten von dort aus rückwärts, um Quellen zu finden, die nur INDIREKT (über
+   * eine Prisma-Kette) einen Turm versorgen (siehe activeSourceIds dort, User-Vorgabe: "Lichtquellen,
+   * die nur auf ein Prisma zeigen, sollen auch als aktiv gelten"). */
+  directSourcesIntoPrism: Map<string, Set<string>>
+  directPrismsIntoPrism: Map<string, Set<string>>
+  /** Prisma-Ids, deren Ausgabe in DIESEM Durchlauf direkt einen Turm erreicht hat (Gegenstück zu
+   * `activeSourceIds` für Prismen statt Quellen). */
+  prismsFeedingTower: Set<string>
 }
 
 /** Rundet wie vom User vorgegeben: <.5 ab, >.5 auf (= Standard-Rundung). */
@@ -420,6 +437,7 @@ function tracePass(
       resourceId: output.id,
       color: output.color,
       isRawSource: false,
+      prismId: prism.id,
       stepsLeft: prismStrengths.get(prism.id) ?? 0,
       alive: true,
       reachedEndpoint: false,
@@ -435,6 +453,9 @@ function tracePass(
   const prismStrengthSums = new Map<string, { sum: number; count: number }>()
   const towerHits = new Map<string, { resourceId: string; strength: number }>()
   const activeSourceIds = new Set<string>()
+  const directSourcesIntoPrism = new Map<string, Set<string>>()
+  const directPrismsIntoPrism = new Map<string, Set<string>>()
+  const prismsFeedingTower = new Set<string>()
 
   function registerHit(prism: Prism, travelDirection: HexDirection, resourceId: string, isRawSource: boolean, strength: number) {
     // `travelDirection` ist die Richtung, in die der Strahl unterwegs war, als er die Zelle
@@ -467,7 +488,19 @@ function tracePass(
     if (front.cells.length > 1) {
       segments.push({ cells: front.cells, color: front.color, resourceId: front.resourceId, reachedEndpoint: front.reachedEndpoint })
     }
-    if (front.hitPrism) registerHit(front.hitPrism.prism, front.hitPrism.fromDirection, front.resourceId, front.isRawSource, front.stepsLeft)
+    if (front.hitPrism) {
+      registerHit(front.hitPrism.prism, front.hitPrism.fromDirection, front.resourceId, front.isRawSource, front.stepsLeft)
+      const targetPrismId = front.hitPrism.prism.id
+      if (front.isRawSource && front.sourceId) {
+        const set = directSourcesIntoPrism.get(targetPrismId) ?? new Set<string>()
+        set.add(front.sourceId)
+        directSourcesIntoPrism.set(targetPrismId, set)
+      } else if (front.prismId) {
+        const set = directPrismsIntoPrism.get(targetPrismId) ?? new Set<string>()
+        set.add(front.prismId)
+        directPrismsIntoPrism.set(targetPrismId, set)
+      }
+    }
     if (front.hitTower) {
       // "Erster gewinnt" (User-Vorgabe): kommt später in dieser Schleife noch ein zweiter,
       // andersfarbiger Strahl an demselben Turm an, wird er ignoriert — die Reihenfolge hier ist
@@ -477,6 +510,7 @@ function tracePass(
         towerHits.set(front.hitTower.towerId, { resourceId: front.hitTower.resourceId, strength: front.hitTower.strength })
       }
       if (front.isRawSource && front.sourceId) activeSourceIds.add(front.sourceId)
+      else if (front.prismId) prismsFeedingTower.add(front.prismId)
     }
   }
 
@@ -485,7 +519,18 @@ function tracePass(
     if (count > 0) prismAvgStrength.set(prismId, roundStrength(sum / count))
   }
 
-  return { segments, prismCounts, prismColors, prismSides, prismAvgStrength, towerHits, activeSourceIds }
+  return {
+    segments,
+    prismCounts,
+    prismColors,
+    prismSides,
+    prismAvgStrength,
+    towerHits,
+    activeSourceIds,
+    directSourcesIntoPrism,
+    directPrismsIntoPrism,
+    prismsFeedingTower,
+  }
 }
 
 function resolveTriangleOutput(presentColors: Set<string>): ResourceDefinition | null {
@@ -583,5 +628,23 @@ export function simulateLight(
     })
   }
 
-  return { segments: pass.segments, prismStatus, towerAmmo: pass.towerHits, activeSourceIds: pass.activeSourceIds }
+  // Transitive Aktiv-Markierung (User-Vorgabe: "Lichtquellen, die nur auf ein Prisma zeigen, sollen
+  // auch als aktiv gelten") — `pass.activeSourceIds` allein enthält nur Quellen, die SELBST direkt
+  // einen Turm treffen; eine Quelle, die nur in ein Prisma einspeist (das seinerseits — evtl. über
+  // mehrere weitere Prismen — einen Turm versorgt), fehlte darin bisher komplett. Da `pass` hier der
+  // LETZTE Durchlauf ist (stabiler Schnappschuss des gesamten aufgelösten Netzwerks, siehe
+  // TracePass-Kommentar), reicht ein einmaliger Rückwärts-Durchlauf von den turm-versorgenden
+  // Prismen über die Prisma-Kette bis zu deren jeweiligen Quellen.
+  const activeSourceIds = new Set(pass.activeSourceIds)
+  const visitedPrisms = new Set<string>()
+  const prismQueue = [...pass.prismsFeedingTower]
+  while (prismQueue.length > 0) {
+    const prismId = prismQueue.pop()!
+    if (visitedPrisms.has(prismId)) continue
+    visitedPrisms.add(prismId)
+    for (const sourceId of pass.directSourcesIntoPrism.get(prismId) ?? []) activeSourceIds.add(sourceId)
+    for (const upstreamPrismId of pass.directPrismsIntoPrism.get(prismId) ?? []) prismQueue.push(upstreamPrismId)
+  }
+
+  return { segments: pass.segments, prismStatus, towerAmmo: pass.towerHits, activeSourceIds }
 }

@@ -118,10 +118,11 @@ let welcomeOpen = !hasSeenTutorial()
 // Name/Munition/Level in der "SELECTED"-Karte der rechten Seitenleiste (siehe drawRightSidebar())
 // — anders als das frühere schwebende Info-Panel NICHT mehr blockierend, der Rest des Spiels
 // bleibt bedienbar, solange etwas ausgewählt ist (User-Vorgabe, Referenzbild).
-interface InfoTarget {
-  kind: 'source' | 'tower'
-  id: string
-}
+// User-Vorgabe: "ich möchte auch leere Felder auswählen können" — die SELECTED-Karte kann jetzt
+// auch eine leere Rasterzelle beschreiben (kind: 'empty', per col/row statt einer Gebäude-Id, da
+// eine leere Zelle keine hat). Mirror/Prisma bleiben weiterhin nie auswählbar (drehen sich
+// stattdessen per Klick, siehe pendingPress-Logik) — das war so schon vor dieser Änderung.
+type InfoTarget = { kind: 'source' | 'tower'; id: string } | { kind: 'empty'; col: number; row: number }
 let infoTarget: InfoTarget | null = null
 
 /** UPGRADE/SELL/Schließen-Knöpfe der "SELECTED"-Karte — wie `hudButtons` ein pro Frame beim
@@ -140,6 +141,14 @@ let sidebarButtons: SidebarButton[] = []
 // Ein Toggle-Icon in der Kauf-Leiste schaltet den Modus ein/aus — solange aktiv, löscht ein Klick
 // auf ein Gebäude/einen Turm ihn sofort statt ihn auszuwählen/zu drehen.
 let demolishMode = false
+
+// User-Vorgabe: manuelle Spiel-Pause — stoppt NUR combatTick() (Wellen/Gegner/Türme), economyTick()
+// (Licht-Simulation/Munitions-Zuweisung) läuft bewusst WEITER, damit Bauen/Umbauen während der
+// Pause weiterhin live sichtbare Rückmeldung gibt. Wird per Klick auf den neuen Pause/Play-Button
+// umgeschaltet (siehe handleHudButton()) UND automatisch gesetzt, sobald ein Spiegel auf den
+// Gegner-Pfad gestellt wird (siehe finalizePlacement()/finalizeMove()) — muss danach manuell per
+// Klick wieder aufgehoben werden (User-Vorgabe: "ich muss manuell wieder auf Start drücken").
+let gamePaused = false
 
 /** Klick vs. Halten+Ziehen auf Generator-Innenkreis/Producer-/Turm-Körper: erst nach dem
  * Loslassen entscheiden, ob es ein Klick (Info-Panel) oder ein Ziehen (Verschieben) war. */
@@ -246,6 +255,18 @@ let enemyPathLength = 0
  * Hindernis im Weg). Nur für die Marker-Entscheidung in drawPath() gebraucht (siehe
  * grid/routing.ts DefensePathResult). */
 let pathHitBlockerId: string | null = null
+/** Schnelle Nachschlage-Menge für `isOnEnemyPath()` (dieselben Zellen wie `enemyPathCells`, nur
+ * als Set der cellKey()-Strings) — wird zusammen mit `enemyPathCells` in recomputeEnemyPath()
+ * neu aufgebaut. */
+let enemyPathCellKeySet = new Set<string>()
+
+/** Ob `cell` gerade Teil des aktuellen Gegner-Pfads ist (User-Vorgabe: "es soll nicht möglich
+ * sein, Gebäude jeglicher Art auf den Weg der Enemies zu stellen") — Spiegel sind die einzige
+ * Ausnahme (siehe finalizePlacement()/finalizeMove()/finalizeTowerPlacement()/finalizeTowerMove()),
+ * da sie den Pfad ohnehin nur umlenken statt ihn zu blockieren. */
+function isOnEnemyPath(cell: GridCoord): boolean {
+  return enemyPathCellKeySet.has(cellKey(cell))
+}
 
 function rebuildOccupancy() {
   occupancy = new Map()
@@ -278,6 +299,7 @@ function recomputeEnemyPath() {
   const maxSteps = (placementGrid.cols + placementGrid.rows) * 4 // Sicherheitsbremse gg. Spiegel-Endlosschleife
   const { cells, hitBlockerId } = traceDefensePath(placementGrid, lookup, endpointNode(), endpointDirection, maxSteps)
   enemyPathCells = [...cells].reverse()
+  enemyPathCellKeySet = new Set(enemyPathCells.map((c) => cellKey(c)))
   enemyPathPixels = enemyPathCells.map((c) => cellCenter(placementGrid, c))
   enemyPathLength = pathTotalLength(enemyPathPixels)
   pathHitBlockerId = hitBlockerId
@@ -515,7 +537,7 @@ function demolishEconomyBuilding(hit: EconomyHit) {
   }
   rebuildOccupancy()
   recomputeEnemyPath()
-  if (infoTarget && infoTarget.id === hit.id) infoTarget = null
+  if (infoTarget && infoTarget.kind !== 'empty' && infoTarget.id === hit.id) infoTarget = null
 }
 
 /** Levelt das Gebäude/den Turm hinter `target` um 1 hoch, sofern noch nicht maximal und die
@@ -524,6 +546,7 @@ function demolishEconomyBuilding(hit: EconomyHit) {
  * Info-Panel (siehe pointerdown). Prismen/Spiegel haben kein Level und daher auch kein Info-Panel
  * — Klick dreht sie stattdessen (siehe pendingPress-Logik). */
 function attemptLevelUp(target: InfoTarget) {
+  if (target.kind === 'empty') return // leere Zelle hat nichts zum Hochleveln
   if (target.kind === 'source') {
     const source = lightSources.find((s) => s.id === target.id)
     if (!source || source.level >= GENERATOR_MAX_LEVEL) return
@@ -545,6 +568,7 @@ function attemptLevelUp(target: InfoTarget) {
  * jeweils passende, schon vorhandene Abriss-Funktion. Spiegel/Prismen haben nie ein `infoTarget`
  * (sie drehen sich stattdessen per Klick, siehe pointerup), brauchen hier also keinen Zweig. */
 function sellSelected(target: InfoTarget) {
+  if (target.kind === 'empty') return // leere Zelle hat nichts zum Verkaufen
   if (target.kind === 'source') {
     demolishEconomyBuilding({ kind: 'source', id: target.id })
   } else {
@@ -559,7 +583,7 @@ function demolishTower(tower: PlacedTower) {
   addToInventory(inventory, 'lumen', getTowerDefinition(tower.kind).cost)
   rebuildOccupancy()
   recomputeEnemyPath()
-  if (infoTarget && infoTarget.id === tower.id) infoTarget = null
+  if (infoTarget && infoTarget.kind !== 'empty' && infoTarget.id === tower.id) infoTarget = null
 }
 
 let placingNewKind: PaletteKind | null = null
@@ -573,6 +597,7 @@ let movingCursor: Point | null = null
 function handleHudButton(id: HudButton['id']) {
   if (id === 'cheat') cheatAddHundredToAll(inventory)
   else if (id === 'demolish') demolishMode = !demolishMode
+  else if (id === 'pause') gamePaused = !gamePaused
   // 'settings', 'save' und 'menu': absichtlich ohne Funktion (User-Wunsch — noch keine Logik dahinter).
 }
 
@@ -652,6 +677,17 @@ canvas.addEventListener('pointerdown', (e) => {
       return
     }
     pendingPress = { kind: economyHit.kind, id: economyHit.id, downPos: worldPos }
+    return
+  }
+
+  // User-Vorgabe: "ich möchte auch leere Felder auswählen können" — trifft der Klick keine der
+  // obigen Interaktionen (Button/Leiste/Turm/Endpunkt/Gebäude), aber eine gültige (leere)
+  // Rasterzelle, wird DIE ausgewählt (mit Info, dass sie leer ist, siehe selectedRows()). Nicht im
+  // Abriss-Modus (da gäbe es ohnehin nichts abzureißen, ein Klick soll dort nicht versehentlich
+  // eine Auswahl auslösen).
+  if (!demolishMode) {
+    const cell = cellAtPoint(placementGrid, worldPos.x, worldPos.y)
+    if (cell) infoTarget = { kind: 'empty', col: cell.col, row: cell.row }
   }
 })
 
@@ -679,30 +715,52 @@ canvas.addEventListener('pointermove', (e) => {
   if (placingTowerKind) placingTowerCursor = worldPos
 })
 
+/** Bug-Fix (User-Report): stand `infoTarget` auf `{kind:'empty', col, row}` und genau DIESE Zelle
+ * bekommt jetzt ein Gebäude (Neubau, Verschieben ODER Tausch) — die SELECTED-Karte zeigte bis
+ * eben weiter "Empty Cell", obwohl längst etwas dort steht. Aktualisiert die Auswahl auf das neue
+ * Ziel (bzw. löscht sie, wenn dort ein Mirror/Prisma landet — die haben nie ein `infoTarget`). Ein
+ * Selektions-Stand für eine ANDERE Zelle bleibt unangetastet. */
+function updateInfoTargetForCell(col: number, row: number, next: InfoTarget | null) {
+  if (infoTarget && infoTarget.kind === 'empty' && infoTarget.col === col && infoTarget.row === row) infoTarget = next
+}
+
 function finalizePlacement(pos: Point) {
   const kind = placingNewKind
   if (!kind) return
   const cell = cellAtPoint(placementGrid, pos.x, pos.y)
   if (!cell || occupancy.has(cellKey(cell))) return
+  // User-Vorgabe: "es soll nicht möglich sein, Gebäude jeglicher Art auf den Weg der Enemies zu
+  // stellen, diese sollen blockiert werden, lediglich Mirrors können dort platziert werden" — der
+  // Pfad selbst lenkt Spiegel schon um (siehe recomputeEnemyPath()), sie sind also die einzige
+  // Ausnahme. Ein frisch platzierter Spiegel AUF dem (alten) Pfad pausiert danach automatisch das
+  // Spiel (siehe unten) — muss der Spieler bewusst per Klick auf den Pause/Play-Button wieder
+  // aufheben ("ich muss manuell wieder auf Start drücken").
+  const onPath = isOnEnemyPath(cell)
+  if (onPath && kind !== 'mirror') return
 
   if (kind === 'mirror') {
     if (!canAfford(inventory, 'lumen', BUILDING_COSTS.mirror)) return
     spend(inventory, 'lumen', BUILDING_COSTS.mirror)
     mirrors.push(createMirror(cell.col, cell.row))
+    updateInfoTargetForCell(cell.col, cell.row, null)
   } else if (kind === 'prism-simple' || kind === 'prism-complex') {
     const cost = kind === 'prism-simple' ? BUILDING_COSTS.prismSimple : BUILDING_COSTS.prismComplex
     if (!canAfford(inventory, 'lumen', cost)) return
     spend(inventory, 'lumen', cost)
     prisms.push(createPrism(cell.col, cell.row, kind === 'prism-simple' ? 'triangle' : 'hexagon'))
+    updateInfoTargetForCell(cell.col, cell.row, null)
   } else {
     const resourceId = sourceResourceIdForPalette(kind)
     if (!resourceId) return
     if (!canAfford(inventory, 'lumen', BUILDING_COSTS.source)) return
     spend(inventory, 'lumen', BUILDING_COSTS.source)
-    lightSources.push(createLightSource(cell.col, cell.row, resourceId))
+    const source = createLightSource(cell.col, cell.row, resourceId)
+    lightSources.push(source)
+    updateInfoTargetForCell(cell.col, cell.row, { kind: 'source', id: source.id })
   }
   rebuildOccupancy()
   recomputeEnemyPath()
+  if (onPath && kind === 'mirror') gamePaused = true
 }
 
 /** Irgendein Lichtquelle/Spiegel/Prisma (unabhängig vom Typ) anhand seiner Id finden — fürs
@@ -724,23 +782,40 @@ function finalizeMove(pos: Point) {
   if (!cell || !movingBuildingId) return
   const moving = findEconomyBuilding(movingBuildingId)
   if (!moving) return
+  // Dieselbe Pfad-Sperre wie beim Neu-Platzieren (siehe finalizePlacement()) — gilt auch fürs
+  // Verschieben eines bestehenden Gebäudes, sonst wäre "woanders bauen, dann auf den Pfad ziehen"
+  // ein Schlupfloch. `movingKind` verfolgt main.ts pointerdown/pointermove bereits mit.
+  const onPath = isOnEnemyPath(cell)
+  if (onPath && movingKind !== 'mirror') return
 
   const occupantId = occupancy.get(cellKey(cell))
+  // Bug-Fix (User-Report): ein Tausch mit einem Spiegel, der GERADE auf dem Pfad steht, konnte den
+  // Tausch-Partner unbemerkt auf dessen (alten) Pfad-Platz setzen — der obige Check prüft nur das
+  // Ziel-Feld (`cell`), nicht die alte Zelle des gezogenen Gebäudes, auf der nach einem Tausch der
+  // PARTNER landet. Kein Blockieren mehr dafür (User-Vorgabe): stattdessen pausiert das genauso wie
+  // eine direkte Spiegel-Platzierung auf dem Pfad.
+  const originalCol = moving.col
+  const originalRow = moving.row
+  let otherId: string | null = null
   if (occupantId && occupantId !== movingBuildingId) {
     const other = findEconomyBuilding(occupantId) ?? towers.find((t) => t.id === occupantId)
     if (!other) return
-    const originalCol = moving.col
-    const originalRow = moving.row
     moving.col = other.col
     moving.row = other.row
     other.col = originalCol
     other.row = originalRow
+    otherId = occupantId
   } else {
     moving.col = cell.col
     moving.row = cell.row
   }
   rebuildOccupancy()
   recomputeEnemyPath()
+  if (onPath && movingKind === 'mirror') gamePaused = true
+  if (otherId && !mirrors.some((m) => m.id === otherId) && isOnEnemyPath({ col: originalCol, row: originalRow })) gamePaused = true
+
+  if (movingKind === 'source') updateInfoTargetForCell(cell.col, cell.row, { kind: 'source', id: movingBuildingId })
+  else if (movingKind === 'mirror' || movingKind === 'prism') updateInfoTargetForCell(cell.col, cell.row, null)
 }
 
 /** Turm verschieben: snapt auf den nächsten freien Knotenpunkt (oder tauscht mit dessen Besitzer,
@@ -750,7 +825,8 @@ function finalizeTowerMove(pos: Point) {
   const tower = towers.find((t) => t.id === movingBuildingId)
   if (!tower) return
   const cell = nearestCell(placementGrid, pos.x, pos.y)
-  if (!canPlaceAt(cell)) return
+  // Türme dürfen NIE auf den Gegner-Pfad — anders als Mirror keine Ausnahme (siehe isOnEnemyPath()).
+  if (!canPlaceAt(cell) || isOnEnemyPath(cell)) return
 
   const occupantId = occupancy.get(cellKey(cell))
   if (occupantId && occupantId !== tower.id) {
@@ -769,20 +845,24 @@ function finalizeTowerMove(pos: Point) {
   }
   rebuildOccupancy()
   recomputeEnemyPath()
+  updateInfoTargetForCell(cell.col, cell.row, { kind: 'tower', id: tower.id })
 }
 
 function finalizeTowerPlacement(pos: Point) {
   const kind = placingTowerKind
   if (!kind) return
   const cell = nearestCell(placementGrid, pos.x, pos.y)
-  if (!canPlaceAt(cell) || occupancy.has(cellKey(cell))) return
+  // Türme dürfen NIE auf den Gegner-Pfad — anders als Mirror keine Ausnahme (siehe isOnEnemyPath()).
+  if (!canPlaceAt(cell) || occupancy.has(cellKey(cell)) || isOnEnemyPath(cell)) return
 
   const def = getTowerDefinition(kind)
   if (!canAfford(inventory, 'lumen', def.cost)) return
   spend(inventory, 'lumen', def.cost)
-  towers.push(createTower(nextTowerId(), kind, cell.col, cell.row))
+  const tower = createTower(nextTowerId(), kind, cell.col, cell.row)
+  towers.push(tower)
   rebuildOccupancy()
   recomputeEnemyPath()
+  updateInfoTargetForCell(cell.col, cell.row, { kind: 'tower', id: tower.id })
 }
 
 window.addEventListener('pointerup', (e) => {
@@ -885,7 +965,7 @@ function drawTowerPlacementPreview() {
   const cell = nearestCell(placementGrid, placingTowerCursor.x, placingTowerCursor.y)
   const center = cellCenter(placementGrid, cell)
 
-  const valid = canPlaceAt(cell) && !occupancy.has(cellKey(cell))
+  const valid = canPlaceAt(cell) && !occupancy.has(cellKey(cell)) && !isOnEnemyPath(cell)
   if (!valid) {
     ctx!.save()
     ctx!.globalAlpha = 0.35
@@ -923,15 +1003,19 @@ function drawTowers() {
   }
 }
 
-/** Zelle des aktuell ausgewählten Gebäudes/Turms (siehe `infoTarget`), oder `null` — Mirror/Prisma
- * haben nie ein `infoTarget` (siehe sellSelected()-Kommentar), daher hier nicht behandelt. */
+/** Zelle des aktuell ausgewählten Gebäudes/Turms/leeren Felds (siehe `infoTarget`), oder `null` —
+ * Mirror/Prisma haben nie ein `infoTarget` (siehe sellSelected()-Kommentar), daher hier nicht
+ * behandelt. */
 function selectedCell(): GridCoord | null {
   if (!infoTarget) return null
+  if (infoTarget.kind === 'empty') return { col: infoTarget.col, row: infoTarget.row }
   if (infoTarget.kind === 'source') {
-    const source = lightSources.find((s) => s.id === infoTarget!.id)
+    const sourceId = infoTarget.id
+    const source = lightSources.find((s) => s.id === sourceId)
     return source ? { col: source.col, row: source.row } : null
   }
-  const tower = towers.find((t) => t.id === infoTarget!.id)
+  const towerId = infoTarget.id
+  const tower = towers.find((t) => t.id === towerId)
   return tower ? { col: tower.col, row: tower.row } : null
 }
 
@@ -1194,7 +1278,9 @@ function drawSelectedCard(x: number, y: number) {
   }
 
   const rowHeight = 18
-  const height = CARD_PADDING * 2 + 20 + selected.rows.length * rowHeight + 10 + SIDEBAR_BUTTON_HEIGHT
+  // User-Vorgabe: eine leere Zelle ist nicht upgrade-/verkaufbar (`selected.interactive === false`,
+  // siehe selectedRows()) — dafür bekommt die Karte auch keine Knopf-Zeile, entsprechend kürzer.
+  const height = CARD_PADDING * 2 + 20 + selected.rows.length * rowHeight + (selected.interactive ? 10 + SIDEBAR_BUTTON_HEIGHT : 0)
   drawCard(ctx!, x, y, SIDE_PANEL_WIDTH, height, true)
   let cursorY = y + CARD_PADDING + 12
 
@@ -1221,6 +1307,8 @@ function drawSelectedCard(x: number, y: number) {
     cursorY += rowHeight
   }
   ctx!.restore()
+
+  if (!selected.interactive) return // leere Zelle: keine Upgrade-/Sell-Knöpfe (siehe height oben)
 
   cursorY += 10
   const buttonGap = 8
@@ -1299,7 +1387,19 @@ interface SelectedRow {
  * UPGRADE-Knopf seinen Preis direkt anzeigen (User-Vorgabe), statt ihn nur in der Level-Zeile zu
  * verstecken. Gibt `null` zurück, wenn das Ziel inzwischen weg ist (z. B. gerade abgerissen) —
  * Aufrufer räumt dann `infoTarget` auf. */
-function selectedRows(target: InfoTarget): { title: string; rows: SelectedRow[]; upgradeCost: number | null } | null {
+function selectedRows(target: InfoTarget): { title: string; rows: SelectedRow[]; upgradeCost: number | null; interactive: boolean } | null {
+  if (target.kind === 'empty') {
+    const onPath = isOnEnemyPath({ col: target.col, row: target.row })
+    return {
+      title: 'Empty Cell',
+      upgradeCost: null,
+      interactive: false,
+      rows: [
+        { label: 'Status', value: 'Nothing built here' },
+        { label: 'Enemy Path', value: onPath ? 'Yes (mirrors only)' : 'No' },
+      ],
+    }
+  }
   if (target.kind === 'source') {
     const source = lightSources.find((s) => s.id === target.id)
     if (!source) return null
@@ -1309,6 +1409,7 @@ function selectedRows(target: InfoTarget): { title: string; rows: SelectedRow[];
     return {
       title: 'Light Source',
       upgradeCost,
+      interactive: true,
       rows: [
         { label: 'Color', value: getResource(source.resourceId).name },
         { label: 'Level', value: maxed ? `${source.level}/${GENERATOR_MAX_LEVEL} (max)` : `${source.level}/${GENERATOR_MAX_LEVEL} (Lv.${source.level + 1})`, action: maxed ? undefined : 'level' },
@@ -1328,6 +1429,7 @@ function selectedRows(target: InfoTarget): { title: string; rows: SelectedRow[];
   return {
     title: def.name,
     upgradeCost,
+    interactive: true,
     rows: [
       { label: 'Ammo', value: tower.resourceId && !hasAmmoAvailable(tower) ? `${ammoLabel} (Shortage!)` : ammoLabel },
       { label: 'Level', value: maxed ? `${tower.level}/${TOWER_MAX_LEVEL} (max)` : `${tower.level}/${TOWER_MAX_LEVEL}`, action: maxed ? undefined : 'level' },
@@ -1352,7 +1454,11 @@ function placementCost(kind: PaletteKind): number {
 function drawPlacementPreview() {
   if (!placingNewKind || !placingCursor) return
   const cell = cellAtPoint(placementGrid, placingCursor.x, placingCursor.y)
-  const valid = !!cell && !occupancy.has(cellKey(cell)) && canAfford(inventory, 'lumen', placementCost(placingNewKind))
+  const valid =
+    !!cell &&
+    !occupancy.has(cellKey(cell)) &&
+    canAfford(inventory, 'lumen', placementCost(placingNewKind)) &&
+    (placingNewKind === 'mirror' || !isOnEnemyPath(cell))
   if (cell) drawCellHighlight(ctx!, placementGrid, cell, valid ? '#39ff8f' : '#ff3355', 0.3)
 
   const previewPos = cell ? cellCenter(placementGrid, cell) : placingCursor
@@ -1407,7 +1513,7 @@ function drawMovePreview() {
     const tower = towers.find((t) => t.id === movingBuildingId)
     if (!tower) return
     const cell = nearestCell(placementGrid, movingCursor.x, movingCursor.y)
-    const valid = canPlaceAt(cell)
+    const valid = canPlaceAt(cell) && !isOnEnemyPath(cell)
     const center = cellCenter(placementGrid, cell)
     if (!valid) {
       ctx!.save()
@@ -1433,17 +1539,18 @@ function drawMovePreview() {
   if (movingKind === 'source') {
     const source = lightSources.find((s) => s.id === movingBuildingId)
     if (!source) return
-    valid = !!cell && (!occupancy.has(cellKey(cell)) || occupancy.get(cellKey(cell)) === source.id)
+    valid = !!cell && (!occupancy.has(cellKey(cell)) || occupancy.get(cellKey(cell)) === source.id) && !isOnEnemyPath(cell)
     kind = source.resourceId === 'cyan' ? 'source-cyan' : source.resourceId === 'magenta' ? 'source-magenta' : 'source-yellow'
   } else if (movingKind === 'mirror') {
     const mirror = mirrors.find((m) => m.id === movingBuildingId)
     if (!mirror) return
+    // Mirror: keine Pfad-Sperre (siehe finalizeMove()) — die einzige Ausnahme.
     valid = !!cell && (!occupancy.has(cellKey(cell)) || occupancy.get(cellKey(cell)) === mirror.id)
     kind = 'mirror'
   } else if (movingKind === 'prism') {
     const prism = prisms.find((p) => p.id === movingBuildingId)
     if (!prism) return
-    valid = !!cell && (!occupancy.has(cellKey(cell)) || occupancy.get(cellKey(cell)) === prism.id)
+    valid = !!cell && (!occupancy.has(cellKey(cell)) || occupancy.get(cellKey(cell)) === prism.id) && !isOnEnemyPath(cell)
     kind = prism.prismKind === 'triangle' ? 'prism-simple' : 'prism-complex'
   }
   if (!kind) return
@@ -1475,6 +1582,13 @@ function drawWorld() {
 
   for (const source of lightSources) {
     if (isSourceMaxed(source)) drawMaxLevelCellMarker(ctx!, placementGrid, { col: source.col, row: source.row })
+  }
+  // User-Vorgabe: Max-Level-Türme sollen denselben goldenen Rasterfeld-Marker bekommen wie
+  // Economy-Gebäude — NICHT (wie zuvor) einen Kreis um das Turm-Icon selbst. Hier statt in
+  // drawTowers() gezeichnet, damit er wie bei den Gebäuden als Hintergrund-Glühen UNTER dem
+  // Turm-Icon liegt (drawTowers() läuft erst danach).
+  for (const tower of towers) {
+    if (tower.level >= TOWER_MAX_LEVEL) drawMaxLevelCellMarker(ctx!, placementGrid, { col: tower.col, row: tower.row })
   }
 
   for (const source of lightSources) drawLightSourceEntity(ctx!, source, buildingCenter(source), elapsedSeconds, lightSimulation.activeSourceIds.has(source.id))
@@ -1509,7 +1623,7 @@ function economyTick(dt: number) {
 }
 
 function combatTick(dt: number) {
-  if (!worldReady) return
+  if (!worldReady || gamePaused) return
 
   // tickWaveSpawning() gibt `true` GENAU im Frame des Wellenwechsels zurück (Pause -> Spawning,
   // siehe towerdefense/waves.ts) — daran hängen die "pro Welle"-Zähler, statt separat auf eine
@@ -1568,7 +1682,7 @@ function render(_dt: number) {
   drawLeftSidebar()
   drawRightSidebar()
   drawBaseDestroyedMessage()
-  drawHud(ctx!, width, inventory, playerName, playerLevel, hudButtons, demolishMode)
+  drawHud(ctx!, width, inventory, playerName, playerLevel, hudButtons, demolishMode, gamePaused)
 
   if (welcomeOpen) drawWelcomePanel(ctx!, width, height)
 }

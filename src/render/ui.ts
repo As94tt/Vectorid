@@ -232,6 +232,32 @@ export const drawCheatIcon: IconDrawer = (ctx, x, y, size, color) => {
   ctx.restore()
 }
 
+/** Pause (zwei senkrechte Balken) — HUD-Button zeigt dieses Icon, solange das Spiel läuft (User-
+ * Vorgabe), Klick pausiert (siehe main.ts gamePaused). */
+export const drawPauseIcon: IconDrawer = (ctx, x, y, size, color) => {
+  ctx.save()
+  ctx.fillStyle = color
+  const barWidth = size * 0.5
+  const gap = size * 0.35
+  ctx.fillRect(x - gap / 2 - barWidth, y - size, barWidth, size * 2)
+  ctx.fillRect(x + gap / 2, y - size, barWidth, size * 2)
+  ctx.restore()
+}
+
+/** Play (Dreieck nach rechts) — HUD-Button zeigt dieses Icon, solange das Spiel pausiert ist
+ * (User-Vorgabe), Klick setzt fort (siehe main.ts gamePaused). */
+export const drawPlayIcon: IconDrawer = (ctx, x, y, size, color) => {
+  ctx.save()
+  ctx.fillStyle = color
+  ctx.beginPath()
+  ctx.moveTo(x - size * 0.6, y - size)
+  ctx.lineTo(x - size * 0.6, y + size)
+  ctx.lineTo(x + size * 0.9, y)
+  ctx.closePath()
+  ctx.fill()
+  ctx.restore()
+}
+
 /** Herz (Basis-HP): zwei Bögen + Spitze, via zusammengesetzter Pfad. */
 export function drawHeartIcon(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, color: string) {
   ctx.save()

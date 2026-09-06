@@ -1,7 +1,17 @@
 import { COLORS } from '../constants/colors'
 import { RESOURCES } from '../data/resources'
 import { getBalance, type Inventory } from '../economy/inventory'
-import { drawCard, drawCheatIcon, drawCurrencyIcon, drawDemolishIcon, drawMenuIcon, drawSaveIcon, drawSettingsIcon } from './ui'
+import {
+  drawCard,
+  drawCheatIcon,
+  drawCurrencyIcon,
+  drawDemolishIcon,
+  drawMenuIcon,
+  drawPauseIcon,
+  drawPlayIcon,
+  drawSaveIcon,
+  drawSettingsIcon,
+} from './ui'
 
 // Globale Kopfzeile: Spielername/Level, Lumen-/Prisma-Bestand, Einstellungen/Speichern (noch ohne
 // Funktion), Menü (ebenfalls ohne Funktion, nur Referenzbild-Parität) und ein Cheat-Button (+100
@@ -13,7 +23,7 @@ import { drawCard, drawCheatIcon, drawCurrencyIcon, drawDemolishIcon, drawMenuIc
 export const HUD_HEIGHT = 64
 
 export interface HudButton {
-  id: 'settings' | 'save' | 'cheat' | 'demolish' | 'menu'
+  id: 'pause' | 'settings' | 'save' | 'cheat' | 'demolish' | 'menu'
   label: string
   x: number
   y: number
@@ -22,6 +32,7 @@ export interface HudButton {
 }
 
 const ICON_DRAWERS: Record<HudButton['id'], typeof drawSaveIcon> = {
+  pause: drawPauseIcon,
   save: drawSaveIcon,
   settings: drawSettingsIcon,
   menu: drawMenuIcon,
@@ -35,12 +46,13 @@ export function buildHudButtons(canvasWidth: number): HudButton[] {
   const y = (HUD_HEIGHT - height) / 2
   const gap = 10
   const rightPadding = 20
-  // "ABRISS" steht bewusst GANZ links in dieser Reihe (letzter Eintrag -> kleinstes x, siehe
-  // Positionsformel unten) — im HUD statt in einer der beiden Kauf-Leisten, die schon eng
-  // gepackt sind, UND weil der Modus für BEIDE Seiten gleichzeitig gilt (Economy-Gebäude UND
-  // Türme), nicht nur für eine. "MENU" ganz rechts, dem Referenzbild entsprechend, ohne Funktion
-  // (User-Vorgabe: reine Optik-Parität, wie SETTINGS/SAVE).
+  // "PAUSE" steht GANZ links (User-Vorgabe: "links neben DEMOLISH"), danach "ABRISS" (letzter
+  // Eintrag hier -> kleinstes x, siehe Positionsformel unten) — im HUD statt in einer der beiden
+  // Kauf-Leisten, die schon eng gepackt sind, UND weil beide Modi für BEIDE Seiten gleichzeitig
+  // gelten (Economy-Gebäude UND Türme), nicht nur für eine. "MENU" ganz rechts, dem Referenzbild
+  // entsprechend, ohne Funktion (User-Vorgabe: reine Optik-Parität, wie SETTINGS/SAVE).
   const order: { id: HudButton['id']; label: string }[] = [
+    { id: 'pause', label: 'PAUSE' },
     { id: 'demolish', label: 'DEMOLISH' },
     { id: 'cheat', label: 'CHEAT' },
     { id: 'save', label: 'SAVE' },
@@ -60,19 +72,23 @@ export function hitTestButton(button: { x: number; y: number; width: number; hei
   return x >= button.x && x <= button.x + button.width && y >= button.y && y <= button.y + button.height
 }
 
-function drawButton(ctx: CanvasRenderingContext2D, button: HudButton, active: boolean) {
+/** `icon`/`label` überschreiben je nach Zustand, was sonst statisch aus `button` käme — braucht nur
+ * der neue PAUSE-Button (Icon UND Beschriftung wechseln zwischen Pause/Play, siehe drawHud()),
+ * DEMOLISH bleibt beim bisherigen "gleiches Icon, Text wird zu 'ON'"-Muster. */
+function drawButton(ctx: CanvasRenderingContext2D, button: HudButton, active: boolean, icon?: typeof drawSaveIcon, label?: string) {
   const color = active ? '#ff3355' : COLORS.textBright
   drawCard(ctx, button.x, button.y, button.width, button.height, active)
   const iconX = button.x + 22
   const iconY = button.y + button.height / 2
-  ICON_DRAWERS[button.id](ctx, iconX, iconY, 8, color)
+  const drawIcon = icon ?? ICON_DRAWERS[button.id]
+  drawIcon(ctx, iconX, iconY, 8, color)
 
   ctx.save()
   ctx.fillStyle = color
   ctx.font = '11px monospace'
   ctx.textAlign = 'left'
   ctx.textBaseline = 'middle'
-  ctx.fillText(active ? 'ON' : button.label, iconX + 16, iconY + 1)
+  ctx.fillText(label ?? (active ? 'ON' : button.label), iconX + 16, iconY + 1)
   ctx.restore()
 }
 
@@ -84,6 +100,7 @@ export function drawHud(
   level: number,
   buttons: HudButton[],
   demolishActive: boolean,
+  gamePaused: boolean,
 ) {
   ctx.save()
   ctx.fillStyle = COLORS.background
@@ -159,5 +176,14 @@ export function drawHud(
     ctx.restore()
   }
 
-  for (const button of buttons) drawButton(ctx, button, button.id === 'demolish' && demolishActive)
+  for (const button of buttons) {
+    if (button.id === 'pause') {
+      // User-Vorgabe: Icon UND Beschriftung wechseln je nach Spielzustand (Pause-Symbol + "PAUSE"
+      // solange es läuft, Play-Symbol + "RESUME" solange pausiert) — anders als DEMOLISH, dessen
+      // Icon gleich bleibt und nur der Text zu "ON" wechselt.
+      drawButton(ctx, button, gamePaused, gamePaused ? drawPlayIcon : drawPauseIcon, gamePaused ? 'RESUME' : 'PAUSE')
+    } else {
+      drawButton(ctx, button, button.id === 'demolish' && demolishActive)
+    }
+  }
 }
