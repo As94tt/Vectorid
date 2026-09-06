@@ -1,8 +1,7 @@
-import { COLORS } from '../constants/colors'
 import { getResource } from '../data/resources'
-import { GRID_EXPAND_COST } from '../grid/placementGrid'
 import { defaultTowerRotation, getTowerDefinition, TOWER_DEFINITIONS, type PlacedTower, type TowerKind } from '../towerdefense/towers'
-import { drawCircle, drawCircleOutline, drawHalfCircle, drawHexagon, drawHexagonOutline, drawPentagon, drawSquare, drawStar, drawTriangle } from './shapes'
+import { drawCircle, drawHalfCircle, drawHexagon, drawPentagon, drawSquare, drawStar, drawTriangle } from './shapes'
+import { drawCard } from './ui'
 
 /** Munition noch nicht gewählt -> neutrales Grau statt einer Ressourcenfarbe. */
 export const TOWER_UNSELECTED_COLOR = '#8a8a94'
@@ -52,11 +51,14 @@ export function drawTowerPreview(ctx: CanvasRenderingContext2D, kind: TowerKind,
   drawTowerShape(ctx, kind, center.x, center.y, TOWER_ICON_SIZE, color, defaultTowerRotation(kind))
 }
 
-// --- Turm-Kauf-/Erweiterungs-Leiste (Teil 2 der kombinierten Leiste — siehe buildingRender.ts
-// buildPalette() für Teil 1, der den einzigen Spiegel-Eintrag stellt; main.ts reiht beide direkt
-// aneinander in EINE gemeinsame Reihe) ---
+// --- Turm-Kauf-Reihe (Reihe 1 der zweizeiligen Kauf-Leiste — siehe buildingRender.ts
+// buildPalette() für Reihe 2 (Economy-Bauteile); main.ts positioniert beide unabhängig
+// voneinander, siehe centeredRowStartX()) — nur noch die 8 Turmtypen selbst, Türme-Info/Farb-
+// Guide sind seit einer früheren Runde keine Popup-Icons mehr (User-Vorgabe: "nicht mehr als
+// öffnenbares Popup, sondern immer"), siehe render/referencePanels.ts drawColorGuideList() für
+// die jetzt immer sichtbare Seitenleisten-Variante.
 
-export type TowerPaletteKind = TowerKind | 'expand-grid' | 'tower-info' | 'color-guide'
+export type TowerPaletteKind = TowerKind
 
 export interface TowerPaletteItem {
   kind: TowerPaletteKind
@@ -70,8 +72,18 @@ export interface TowerPaletteItem {
 
 const PALETTE_RADIUS = 15
 
+// Dieselben Karten-Maße wie render/buildingRender.ts paletteCardBounds() — beide Reihen der
+// kombinierten Kauf-Leiste sollen optisch identisch aussehen.
+const CARD_WIDTH = 56
+const CARD_HEIGHT = 74
+const CARD_TOP_OFFSET = 30
+
+function paletteCardBounds(item: { x: number; y: number }) {
+  return { x: item.x - CARD_WIDTH / 2, y: item.y - CARD_TOP_OFFSET, w: CARD_WIDTH, h: CARD_HEIGHT }
+}
+
 export function buildTowerPalette(startX: number, y: number, gap: number): TowerPaletteItem[] {
-  const towerItems: TowerPaletteItem[] = TOWER_DEFINITIONS.map((def, i) => ({
+  return TOWER_DEFINITIONS.map((def, i) => ({
     kind: def.kind,
     name: def.name,
     cost: def.cost,
@@ -80,83 +92,38 @@ export function buildTowerPalette(startX: number, y: number, gap: number): Tower
     y,
     radius: PALETTE_RADIUS,
   }))
-  const extraKinds: { kind: TowerPaletteKind; name: string; costResourceId: string; cost: number }[] = [
-    { kind: 'expand-grid', name: 'Grid', cost: GRID_EXPAND_COST, costResourceId: 'prisma' },
-    { kind: 'tower-info', name: 'Towers', cost: 0, costResourceId: 'lumen' },
-    { kind: 'color-guide', name: 'Colors', cost: 0, costResourceId: 'lumen' },
-  ]
-  const extraItems: TowerPaletteItem[] = extraKinds.map((item, i) => ({
-    ...item,
-    x: startX + (towerItems.length + i) * gap,
-    y,
-    radius: PALETTE_RADIUS,
-  }))
-  return [...towerItems, ...extraItems]
 }
 
 export function hitTestTowerPalette(items: TowerPaletteItem[], x: number, y: number): TowerPaletteItem | null {
-  return items.find((item) => Math.hypot(item.x - x, item.y - y) <= item.radius + 6) ?? null
+  return (
+    items.find((item) => {
+      const b = paletteCardBounds(item)
+      return x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h
+    }) ?? null
+  )
 }
 
-/** Kurzbeschreibung fürs Hover-Tooltip über einem Kauf-Leisten-Icon (main.ts) — Name + Zweck,
- * für Turm- UND Info-Icons. Turmtypen nutzen ihre eigene TOWER_DEFINITIONS-Beschreibung. */
+/** Kurzbeschreibung fürs Hover-Tooltip über einem Kauf-Leisten-Icon (main.ts). */
 export function towerPaletteItemDescription(kind: TowerPaletteKind): string {
-  switch (kind) {
-    case 'expand-grid':
-      return 'Expand the grid by one row and column'
-    case 'tower-info':
-      return 'Towers — shows every tower type with its stats'
-    case 'color-guide':
-      return 'Color Guide — shows every color, how to mix it, and its combat effect'
-    default:
-      return getTowerDefinition(kind).description
-  }
-}
-
-/** Kleine "alle Formen"-Miniatur fürs Türme-Info-Icon: deutet an, dass dahinter eine
- * Übersicht ALLER Turmformen steckt, statt für einen bestimmten Turmtyp zu stehen. */
-function drawTowerInfoIcon(ctx: CanvasRenderingContext2D, x: number, y: number, radius: number) {
-  drawCircleOutline(ctx, x, y, radius, COLORS.textBright, 1.5, 6)
-  drawTriangle(ctx, x - radius * 0.4, y + radius * 0.3, radius * 0.32, COLORS.textDim, 0, 0)
-  drawSquare(ctx, x + radius * 0.4, y + radius * 0.3, radius * 0.24, COLORS.textDim, 0, 0)
-  drawCircle(ctx, x, y - radius * 0.4, radius * 0.26, COLORS.textDim, 0)
-}
-
-/** Kleine "3 Farbpunkte"-Miniatur fürs Color-Guide-Icon: deutet an, dass dahinter eine
- * Übersicht ALLER Farben steckt, statt für eine bestimmte Farbe zu stehen. */
-function drawColorGuideIcon(ctx: CanvasRenderingContext2D, x: number, y: number, radius: number) {
-  drawCircleOutline(ctx, x, y, radius, COLORS.textBright, 1.5, 6)
-  drawCircle(ctx, x, y - radius * 0.35, radius * 0.24, '#00FFFF', 0)
-  drawCircle(ctx, x - radius * 0.35, y + radius * 0.25, radius * 0.24, '#FF00FF', 0)
-  drawCircle(ctx, x + radius * 0.35, y + radius * 0.25, radius * 0.24, '#FFFF00', 0)
+  return getTowerDefinition(kind).description
 }
 
 export function drawTowerPaletteItem(ctx: CanvasRenderingContext2D, item: TowerPaletteItem, affordable: boolean) {
+  const bounds = paletteCardBounds(item)
+  drawCard(ctx, bounds.x, bounds.y, bounds.w, bounds.h)
+
   ctx.save()
   ctx.globalAlpha = affordable ? 1 : 0.35
 
-  if (item.kind === 'expand-grid') drawHexagonOutline(ctx, item.x, item.y, item.radius, COLORS.gridLineStrong, 2)
-  else if (item.kind === 'tower-info') drawTowerInfoIcon(ctx, item.x, item.y, item.radius)
-  else if (item.kind === 'color-guide') drawColorGuideIcon(ctx, item.x, item.y, item.radius)
-  else drawTowerShape(ctx, item.kind, item.x, item.y, item.radius, TOWER_UNSELECTED_COLOR, defaultTowerRotation(item.kind))
+  drawTowerShape(ctx, item.kind, item.x, item.y, item.radius, TOWER_UNSELECTED_COLOR, defaultTowerRotation(item.kind))
 
   ctx.textAlign = 'center'
   ctx.fillStyle = '#9aa0ab'
-  ctx.font = '9px monospace'
+  ctx.font = '10px monospace'
   ctx.fillText(item.name, item.x, item.y + item.radius + 14)
-  if (item.kind === 'tower-info') {
-    ctx.fillStyle = COLORS.textDim
-    ctx.font = '10px monospace'
-    ctx.fillText('INFO', item.x, item.y + item.radius + 26)
-  } else if (item.kind === 'color-guide') {
-    ctx.fillStyle = COLORS.textDim
-    ctx.font = '10px monospace'
-    ctx.fillText('GUIDE', item.x, item.y + item.radius + 26)
-  } else {
-    ctx.fillStyle = getResource(item.costResourceId).color
-    ctx.font = '10px monospace'
-    ctx.fillText(`${item.cost}`, item.x, item.y + item.radius + 26)
-  }
+  ctx.fillStyle = getResource(item.costResourceId).color
+  ctx.font = '11px monospace'
+  ctx.fillText(`${item.cost}`, item.x, item.y + item.radius + 26)
   ctx.restore()
 }
 

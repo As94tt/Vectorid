@@ -1,10 +1,10 @@
 // Wellensystem (User-Vorgabe): jede Welle besteht aus 20 Gegnern, die im festen Abstand
 // nacheinander spawnen. Sobald der letzte Gegner der Welle gespawnt ist, folgt eine 5-Sekunden-
-// Pause, danach beginnt die nächste Welle. Jede Welle ist stärker als die vorige (siehe
-// `statsForWave()` — eine reine Funktion der Wellennummer, damit ein Rücksetzen nach einem
-// Fehlschlag exakt dieselbe Stärke reproduziert). Leakt während einer Welle mindestens ein
-// Gegner bis zum Ziel durch (siehe `registerLeak()`), gilt die Welle als nicht geschafft: die
-// nächste Welle ist dann `currentWave - 5` (min. 1) statt `currentWave + 1`. Jede 10. Welle
+// Pause, danach beginnt die nächste Welle — IMMER vorwärts (`currentWave + 1`), unabhängig davon,
+// ob während der Welle Gegner durchgekommen sind (User-Vorgabe: das frühere "Welle nicht
+// geschafft -> 5 Wellen zurück" ist komplett durch eine echte Basis-HP ersetzt, siehe main.ts
+// BASE_MAX_HP/combatTick() — ein Leak kostet jetzt HP statt Wellen-Fortschritt). Jede Welle ist
+// stärker als die vorige (siehe `statsForWave()`, reine Funktion der Wellennummer). Jede 10. Welle
 // spawnt zusätzlich (nicht statt) einen deutlich größeren/stärkeren Boss als 21. Gegner.
 
 import { createEnemy, ENEMY_BASE_SIZE, type Enemy } from './enemies'
@@ -15,7 +15,6 @@ export const WAVE_PAUSE_SECONDS = 5
 /** Nach einer Boss-Welle (User-Vorgabe) länger Pause als sonst, damit man kurz durchatmen kann. */
 export const BOSS_WAVE_PAUSE_SECONDS = 10
 export const BOSS_WAVE_INTERVAL = 10
-export const RETRY_SETBACK_WAVES = 5
 
 // Platzhalter-Balancing (wie überall in diesem Projekt): reine Funktion der Wellennummer.
 const BASE_HP = 30
@@ -81,9 +80,6 @@ export interface WaveState {
   enemiesSpawnedInWave: number
   /** 20, oder 21 auf einer Boss-Welle (siehe `isBossWave()`). */
   totalInWave: number
-  /** Wie viele Gegner der aktuellen Welle bis zum Ziel durchgekommen sind — >0 am Ende der
-   * Welle bedeutet "nicht geschafft" (siehe `tickWaveSpawning()`). */
-  waveLeaks: number
   spawnTimer: number
   pauseTimer: number
   phase: 'spawning' | 'pause'
@@ -94,28 +90,23 @@ export function createWaveState(startWave = 1): WaveState {
     currentWave: startWave,
     enemiesSpawnedInWave: 0,
     totalInWave: enemyCountForWave(startWave),
-    waveLeaks: 0,
     spawnTimer: 0,
     pauseTimer: 0,
     phase: 'spawning',
   }
 }
 
-/** Vom Aufrufer bei jedem Gegner aufzurufen, der das Ziel erreicht hat (siehe main.ts
- * pruneEnemies()'s `arrived`) — zählt für die Erfolgs-/Fehlschlag-Entscheidung am Ende der
- * aktuellen Welle. */
-export function registerLeak(state: WaveState) {
-  state.waveLeaks += 1
-}
-
 /**
  * Pro Frame: spawnt ggf. den nächsten Gegner der aktuellen Welle (neue Gegner werden in
- * `enemies` gepusht, Aufrufer hält die Referenz — wie überall sonst in diesem Projekt) bzw.
- * zählt während der Pause runter und entscheidet danach, ob die nächste Welle vorwärts
- * (`currentWave + 1`) oder nach einem Fehlschlag zurückgesetzt (`currentWave - 5`, min. 1)
- * weitergeht.
+ * `enemies` gepusht, Aufrufer hält die Referenz — wie überall sonst in diesem Projekt) bzw. zählt
+ * während der Pause runter und geht danach zur nächsten Welle über (`currentWave + 1` — User-
+ * Vorgabe: Wellen laufen jetzt IMMER vorwärts, ein durchgekommener Gegner kostet stattdessen
+ * Basis-HP statt die Welle "scheitern" zu lassen, siehe main.ts combatTick()/BASE_MAX_HP).
+ * Gibt `true` zurück GENAU in dem Frame, in dem die nächste Welle beginnt (Pause -> Spawning),
+ * damit main.ts wellen-genaue Resets (z. B. "Schaden diese Welle") daran aufhängen kann, ohne
+ * separat auf Wellennummer-Änderungen zu diffen.
  */
-export function tickWaveSpawning(state: WaveState, dt: number, enemies: Enemy[]) {
+export function tickWaveSpawning(state: WaveState, dt: number, enemies: Enemy[]): boolean {
   if (state.phase === 'spawning') {
     state.spawnTimer -= dt
     if (state.spawnTimer <= 0) {
@@ -129,17 +120,17 @@ export function tickWaveSpawning(state: WaveState, dt: number, enemies: Enemy[])
         state.pauseTimer = isBossWave(state.currentWave) ? BOSS_WAVE_PAUSE_SECONDS : WAVE_PAUSE_SECONDS
       }
     }
-    return
+    return false
   }
 
   state.pauseTimer -= dt
-  if (state.pauseTimer > 0) return
+  if (state.pauseTimer > 0) return false
 
-  const nextWave = state.waveLeaks > 0 ? Math.max(1, state.currentWave - RETRY_SETBACK_WAVES) : state.currentWave + 1
+  const nextWave = state.currentWave + 1
   state.currentWave = nextWave
   state.enemiesSpawnedInWave = 0
   state.totalInWave = enemyCountForWave(nextWave)
-  state.waveLeaks = 0
   state.spawnTimer = 0
   state.phase = 'spawning'
+  return true
 }

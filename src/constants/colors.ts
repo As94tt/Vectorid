@@ -15,9 +15,21 @@ export const COLORS = {
   path: 'rgba(255, 45, 170, 0.45)',
   pathGlow: 'rgba(255, 45, 170, 0.9)',
 
-  textDim: '#7d7d87',
-  textMid: '#c7c7d1',
+  // User-Vorgabe: "die Schriftart ist überall etwas zu dunkel" — textDim/textMid angehoben (waren
+  // #7d7d87/#c7c7d1), textBright war schon nahe Weiß und bleibt unverändert.
+  textDim: '#9c9ca8',
+  textMid: '#d8d8e2',
   textBright: '#eafffa',
+
+  // User-Vorgabe: UI komplett auf den Karten-Look des Referenzbilds umstellen (siehe render/ui.ts
+  // drawCard()) — Panel-Hintergrund etwas heller als die Bühne dahinter, dazu ein dünner,
+  // cyan-getönter Rahmen (heller/"active", wenn ausgewählt/hover). `accent` ist der durchgehende
+  // Haupt-Akzent für Fortschrittsbalken/aktive Rahmen, bewusst derselbe Farbton wie gridLineStrong,
+  // nur undurchsichtig.
+  panelBg: '#0d131c',
+  panelBorder: 'rgba(0, 255, 213, 0.25)',
+  panelBorderActive: '#00fff2',
+  accent: '#00fff2',
 } as const
 
 /** Für Text/Text-Icons, die sonst 1:1 in einer Ressourcenfarbe eingefärbt würden (siehe

@@ -52,22 +52,22 @@ export function getPointAtProgress(path: Point[], t: number): Point {
 }
 
 /**
- * `endsAtTower`: seit der Umstellung auf einen strahlbasierten Pfad (siehe grid/routing.ts
- * `traceDefensePath()`, User-Vorgabe: "kein kürzester Weg mehr, sondern wie auf der Economy-Seite
- * mit Spiegeln veränderbar, unendlich lang, bis er auf eine Wand oder einen Turm trifft") gibt es
- * keinen separat platzierten Ziel-Knoten mehr — das Ziel ist dynamisch, wo auch immer der Pfad
- * endet. Endet er an einem Turm, ist der Turm selbst schon sichtbar (kein zusätzlicher Marker
- * nötig); endet er stattdessen an der Wand (Rasterrand), zeigt ein kleines Pentagon den
- * Pfad-Endpunkt an, damit das nicht wie ein Abbruch/Bug aussieht.
+ * Seit dieser Runde (User-Vorgabe: "die Linie, wie die Gegner laufen, wird vom Endpunkt und nicht
+ * vom Startpunkt erzeugt") ist `path[path.length - 1]` immer der feste Endpunkt-Stein (siehe
+ * main.ts `endpointNode()`) — der bekommt IMMER seinen Marker, unabhängig davon, wo der Pfad
+ * herkommt. `path[0]` ist dagegen die dynamische Stelle, an der Gegner tatsächlich auftauchen (wo
+ * auch immer der vom Stein aus zurückverfolgte Strahl endet): `entryHitsBuilding` unterdrückt dort
+ * den Marker, wenn das ohnehin schon ein sichtbares Gebäude ist (kein Marker nötig) — nur an der
+ * bloßen Wand (Rasterrand, kein Gebäude) zeigt ein kleines Hexagon, wo die Gegner einlaufen.
  */
-export function drawPath(ctx: CanvasRenderingContext2D, path: Point[], endsAtTower: boolean) {
+export function drawPath(ctx: CanvasRenderingContext2D, path: Point[], entryHitsBuilding: boolean) {
   if (path.length < 2) return
 
   ctx.save()
   ctx.strokeStyle = COLORS.path
   ctx.shadowColor = COLORS.pathGlow
   ctx.shadowBlur = 12
-  ctx.lineWidth = 3
+  ctx.lineWidth = 6
   ctx.lineJoin = 'round'
   ctx.lineCap = 'round'
   ctx.beginPath()
@@ -76,10 +76,10 @@ export function drawPath(ctx: CanvasRenderingContext2D, path: Point[], endsAtTow
   ctx.stroke()
   ctx.restore()
 
-  const spawn = path[0]
-  drawHexagon(ctx, spawn.x, spawn.y, 14, COLORS.enemy, 0, 18)
-  if (!endsAtTower) {
-    const end = path[path.length - 1]
-    drawPentagon(ctx, end.x, end.y, 16, COLORS.base, 0, 18)
+  if (!entryHitsBuilding) {
+    const entry = path[0]
+    drawHexagon(ctx, entry.x, entry.y, 14, COLORS.enemy, 0, 18)
   }
+  const endpoint = path[path.length - 1]
+  drawPentagon(ctx, endpoint.x, endpoint.y, 16, COLORS.base, 0, 18)
 }

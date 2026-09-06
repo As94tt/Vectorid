@@ -6,8 +6,9 @@ import { COLORS, isColorDark } from '../constants/colors'
 import { getResource } from '../data/resources'
 import { GENERATOR_MAX_LEVEL, type LightSource, type Mirror, type MirrorOrientation, type Prism } from '../economy/buildings'
 import type { BeamSegment, PrismStatus } from '../economy/lightSimulation'
-import { cellCenter, type GridCoord, type HexDirection, type PlacementGrid } from '../grid/placementGrid'
+import { cellCenter, GRID_EXPAND_COST, type GridCoord, type HexDirection, type PlacementGrid } from '../grid/placementGrid'
 import { drawCircle, drawCircleOutline, drawHexagon, drawHexagonOutline, drawTriangle, drawTriangleOutline, strokeRoundedPolyline } from './shapes'
+import { drawCard } from './ui'
 
 /** Pixel-Winkel (Grad) der 6 Hex-Richtungen — deckungsgleich mit den Nachbar-Deltas in
  * grid/placementGrid.ts (gerade Zeile), fürs Platzieren von Anschluss-Punkten/Spiegel-Linien. */
@@ -104,9 +105,17 @@ export function isSourceMaxed(source: LightSource): boolean {
   return source.level >= GENERATOR_MAX_LEVEL
 }
 
+/** Deutlich gedimmt, solange ein Gebäude gerade nichts Nützliches tut (User-Vorgabe: stärkerer
+ * Kontrast zwischen aktiv/inaktiv) — dieselbe Konstante wie main.ts INACTIVE_ALPHA (Türme/
+ * Verbindungen), hier dupliziert, damit dieses Rendering-Modul nicht von main.ts abhängen muss. */
+const INACTIVE_ALPHA = 0.18
+
 /** Hohler Außenring + gefüllter Innenkreis, der 1x/Sekunde pulsiert — identisch zum früheren Generator.
- * Größe skaliert mit `source.level` (siehe levelSizeScale/sourceOuterRadius). */
-export function drawLightSourceEntity(ctx: CanvasRenderingContext2D, source: LightSource, center: { x: number; y: number }, elapsedSeconds: number) {
+ * Größe skaliert mit `source.level` (siehe levelSizeScale/sourceOuterRadius). `active`: liefert die
+ * Quelle gerade an einen Turm (siehe lightSimulation.ts activeSourceIds) — sonst deutlich gedimmt. */
+export function drawLightSourceEntity(ctx: CanvasRenderingContext2D, source: LightSource, center: { x: number; y: number }, elapsedSeconds: number, active: boolean) {
+  ctx.save()
+  ctx.globalAlpha = active ? 1 : INACTIVE_ALPHA
   const color = getResource(source.resourceId).color
   const scale = levelSizeScale(source.level, GENERATOR_MAX_LEVEL)
   const outer = SOURCE_OUTER_SIZE * scale
@@ -115,6 +124,7 @@ export function drawLightSourceEntity(ctx: CanvasRenderingContext2D, source: Lig
   const phase = (elapsedSeconds % PULSE_PERIOD_SECONDS) / PULSE_PERIOD_SECONDS
   const pulse = 0.7 + 0.3 * Math.sin(phase * Math.PI * 2)
   drawCircle(ctx, center.x, center.y, inner * pulse, color, 14)
+  ctx.restore()
 }
 
 /** Eine von 6 möglichen Spiegel-Achsen (siehe MirrorOrientation-Kommentar in economy/buildings.ts)
@@ -235,6 +245,10 @@ export function drawPrismEntity(ctx: CanvasRenderingContext2D, prism: Prism, cen
   // farbunabhängiger Rahmen macht "aktiv" in jedem Fall sichtbar.
   const needsAccentRing = active && isColorDark(color)
 
+  // User-Vorgabe: stärkerer Kontrast zwischen aktiv (Rezept erfüllt) und inaktiv (noch unkonfiguriert,
+  // weiß) — zusätzlich zur Farbe jetzt auch deutlich gedimmt, nicht nur weiß/blass.
+  ctx.save()
+  ctx.globalAlpha = active ? 1 : INACTIVE_ALPHA
   if (prism.prismKind === 'triangle') {
     // `prism.outputDirection` ist nur noch der Rotations-ANKER (legt fest, welche 3 der 6
     // Richtungen überhaupt Ecken sind) — welche dieser 3 Ecken GERADE der Output ist, kommt aus
@@ -249,6 +263,7 @@ export function drawPrismEntity(ctx: CanvasRenderingContext2D, prism: Prism, cen
     if (needsAccentRing) drawHexagonOutline(ctx, center.x, center.y, size + 2, COLORS.textBright, 1.5)
     drawPrismPorts(ctx, center, status.sides, prism.outputDirection, color, active)
   }
+  ctx.restore()
 }
 
 /** Ein Lichtstrahl-Segment (Zellpfad -> Pixel-Punkte) als leuchtende Linie. */
@@ -305,10 +320,14 @@ export function drawBeamTraveler(ctx: CanvasRenderingContext2D, grid: PlacementG
   ctx.restore()
 }
 
-// --- Kauf-Leiste (Teil 1 der kombinierten Leiste oben — siehe towerRender.ts buildTowerPalette()
-// für Teil 2, main.ts reiht beide direkt aneinander in EINE gemeinsame Reihe) ---
+// --- Kauf-Leiste, Reihe 2 (Economy-Bauteile — siehe towerRender.ts buildTowerPalette() für
+// Reihe 1, die Türme; main.ts positioniert beide Reihen unabhängig, siehe centeredRowStartX()) ---
 
-export type PaletteKind = 'source-cyan' | 'source-magenta' | 'source-yellow' | 'mirror' | 'prism-simple' | 'prism-complex'
+/** `expand-grid` gehört funktional nicht zu den platzierbaren Gebäuden (kein Ziehen-aufs-Raster,
+ * sofortige Aktion — siehe main.ts pointerdown-Sonderfall), zählt aber User-Vorgabe zufolge
+ * visuell zur Economy-Seite der Kauf-Leiste ("links vom Trennstrich alle Economy-Gebäude
+ * (Generatoren, Prisma, Mirror, Grid)") — deshalb hier statt bei den Türmen (towerRender.ts). */
+export type PaletteKind = 'source-cyan' | 'source-magenta' | 'source-yellow' | 'mirror' | 'prism-simple' | 'prism-complex' | 'expand-grid'
 
 export interface PaletteItem {
   kind: PaletteKind
@@ -317,18 +336,34 @@ export interface PaletteItem {
   radius: number
   cost: number
   costResourceId: string
+  /** Nur bei `expand-grid` gesetzt — die anderen Economy-Icons zeigen nur ihre Kosten, kein
+   * eigenes Namens-Label (siehe drawPaletteItem()). */
+  name?: string
 }
 
 const PALETTE_RADIUS = 15
 
+// User-Vorgabe: Kauf-Leisten-Icons als umrandete Karten (siehe render/ui.ts drawCard()) statt
+// bloßer Icons — dieselben Maße wie das Turm-Pendant (render/towerRender.ts), damit beide Reihen
+// gleich aussehen. Card-Bounds sind zentriert über `item.x`, aber nach OBEN versetzt gegenüber
+// `item.y` (dem Icon-Zentrum), damit unter dem Icon noch Platz für Name+Kosten-Zeile bleibt.
+const CARD_WIDTH = 56
+const CARD_HEIGHT = 74
+const CARD_TOP_OFFSET = 30
+
+function paletteCardBounds(item: { x: number; y: number }) {
+  return { x: item.x - CARD_WIDTH / 2, y: item.y - CARD_TOP_OFFSET, w: CARD_WIDTH, h: CARD_HEIGHT }
+}
+
 export function buildPalette(startX: number, y: number, gap: number): PaletteItem[] {
-  const specs: { kind: PaletteKind; cost: number; costResourceId: string }[] = [
+  const specs: { kind: PaletteKind; cost: number; costResourceId: string; name?: string }[] = [
     { kind: 'source-cyan', cost: 10, costResourceId: 'lumen' },
     { kind: 'source-magenta', cost: 10, costResourceId: 'lumen' },
     { kind: 'source-yellow', cost: 10, costResourceId: 'lumen' },
     { kind: 'mirror', cost: 5, costResourceId: 'lumen' },
     { kind: 'prism-simple', cost: 25, costResourceId: 'lumen' },
     { kind: 'prism-complex', cost: 50, costResourceId: 'lumen' },
+    { kind: 'expand-grid', cost: GRID_EXPAND_COST, costResourceId: 'prisma', name: 'Grid' },
   ]
   return specs.map((spec, i) => ({ ...spec, x: startX + i * gap, y, radius: PALETTE_RADIUS }))
 }
@@ -341,7 +376,12 @@ export function sourceResourceIdForPalette(kind: PaletteKind): 'cyan' | 'magenta
 }
 
 export function hitTestPalette(items: PaletteItem[], x: number, y: number): PaletteItem | null {
-  return items.find((item) => Math.hypot(item.x - x, item.y - y) <= item.radius + 6) ?? null
+  return (
+    items.find((item) => {
+      const b = paletteCardBounds(item)
+      return x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h
+    }) ?? null
+  )
 }
 
 /** Kurzbeschreibung fürs Hover-Tooltip über einem Kauf-Leisten-Icon (main.ts) — Name + Zweck,
@@ -358,10 +398,15 @@ export function paletteItemDescription(kind: PaletteKind): string {
       return 'Triangle Prism — mixes 2 named colors arriving at its corners into a new one'
     case 'prism-complex':
       return 'Hexagon Prism — mixes raw Cyan/Magenta/Yellow parts (or 3 named colors) into a new one'
+    case 'expand-grid':
+      return 'Expand the grid — 2 columns + 2 rows up to 20 wide, one more row beyond that'
   }
 }
 
 export function drawPaletteItem(ctx: CanvasRenderingContext2D, item: PaletteItem, affordable: boolean) {
+  const bounds = paletteCardBounds(item)
+  drawCard(ctx, bounds.x, bounds.y, bounds.w, bounds.h)
+
   ctx.save()
   ctx.globalAlpha = affordable ? 1 : 0.35
 
@@ -393,11 +438,26 @@ export function drawPaletteItem(ctx: CanvasRenderingContext2D, item: PaletteItem
     case 'prism-complex':
       drawHexagon(ctx, item.x, item.y, item.radius, UNCONFIGURED_COLOR, 0, 8)
       break
+    case 'expand-grid':
+      drawHexagonOutline(ctx, item.x, item.y, item.radius, COLORS.gridLineStrong, 2)
+      break
   }
 
   ctx.textAlign = 'center'
-  ctx.fillStyle = getResource(item.costResourceId).color
-  ctx.font = '10px monospace'
-  ctx.fillText(`${item.cost}`, item.x, item.y + item.radius + 16)
+  if (item.name) {
+    // Nur `expand-grid` hat einen Namen (siehe PaletteItem-Kommentar) — zweizeiliges Label wie
+    // bei den Turm-/Info-Icons (towerRender.ts drawTowerPaletteItem()), statt der sonst hier
+    // üblichen reinen Kosten-Zeile.
+    ctx.fillStyle = '#9aa0ab'
+    ctx.font = '10px monospace'
+    ctx.fillText(item.name, item.x, item.y + item.radius + 14)
+    ctx.fillStyle = getResource(item.costResourceId).color
+    ctx.font = '11px monospace'
+    ctx.fillText(`${item.cost}`, item.x, item.y + item.radius + 26)
+  } else {
+    ctx.fillStyle = getResource(item.costResourceId).color
+    ctx.font = '11px monospace'
+    ctx.fillText(`${item.cost}`, item.x, item.y + item.radius + 16)
+  }
   ctx.restore()
 }

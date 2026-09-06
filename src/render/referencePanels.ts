@@ -1,21 +1,18 @@
-// Drei Seiten hier, alle blockierende Modals mit derselben Chrome (drawPanelChrome()):
-//  - "Türme" (aus dem 'tower-info'-Icon der Kauf-Leiste, siehe towerRender.ts) listet alle 8
-//    Turmtypen mit Beschreibung + Kampf-Werten (main.ts towersInfoOpen).
-//  - Der Farb-Guide (drawColorGuidePanel(), Inhalt in drawColorGuideList()) fasst KURZ zusammen,
-//    woraus jede Farbe gemischt wird (für Tier 3/4 BEIDE Rezept-Varianten) UND welchen Kampfeffekt
-//    sie hat, aufgeteilt auf 2 Spalten (main.ts colorGuideOpen, aus dem 'color-guide'-Icon der
-//    Kauf-Leiste). Lebte früher als nicht-blockierendes Feld im festen Mittel-Streifen zwischen
-//    Economy/Defense — seit der Zusammenlegung auf EIN gemeinsames Raster gibt es diesen Streifen
-//    nicht mehr, daher jetzt ein Modal wie die übrigen beiden Seiten hier.
-//  - Das Willkommens-/Tutorial-Popup (drawWelcomePanel()) erscheint einmalig beim allerersten
-//    Start (siehe main.ts, per localStorage gemerkt).
+// Der Farb-Guide lebt seit einer früheren Runde als IMMER SICHTBARE Seitenleiste links vom Raster
+// (User-Vorgabe: "nicht mehr als öffnenbares Popup, sondern immer") — jetzt als Karten-Liste im
+// Referenzbild-Look (drawCard(), siehe render/ui.ts), main.ts positioniert + ruft sie jeden Frame
+// auf. Die Turmregeln-Liste, die früher direkt darüber stand, ist wieder entfernt (User-Vorgabe:
+// "brauche ich nicht") — ein platzierter Turm hat weiterhin seine eigenen Kennzahlen, jetzt in der
+// "SELECTED"-Karte der RECHTEN Seitenleiste (siehe main.ts drawSelectedCard()) statt in einem
+// schwebenden Info-Panel. Nur das einmalige Willkommens-/Tutorial-Popup (drawWelcomePanel()) ist
+// noch ein echtes blockierendes Modal mit Chrome (drawPanelChrome()) — erscheint einmalig beim
+// allerersten Start (siehe main.ts, per localStorage gemerkt).
 
 import { COLORS, readableTextColor } from '../constants/colors'
 import { getResource, RESOURCES, type ResourceDefinition } from '../data/resources'
 import { COLOR_EFFECT_INFO } from '../towerdefense/ammoEffects'
-import { TOWER_DEFINITIONS } from '../towerdefense/towers'
 import { drawCircle, drawCircleOutline, drawHexagonOutline, drawTriangleOutline } from './shapes'
-import { drawTowerPreview, TOWER_UNSELECTED_COLOR } from './towerRender'
+import { drawCard } from './ui'
 
 const PANEL_FILL = '#0b0d12'
 const CLOSE_BUTTON_SIZE = 26
@@ -67,11 +64,11 @@ function drawPanelChrome(ctx: CanvasRenderingContext2D, width: number, height: n
   ctx.save()
   ctx.textAlign = 'center'
   ctx.fillStyle = COLORS.textBright
-  ctx.font = 'bold 16px monospace'
+  ctx.font = 'bold 17px monospace'
   ctx.fillText(title, bounds.x + bounds.width / 2, bounds.y + 34)
   if (subtitle) {
     ctx.fillStyle = COLORS.textMid
-    ctx.font = '11px monospace'
+    ctx.font = '12px monospace'
     ctx.fillText(subtitle, bounds.x + bounds.width / 2, bounds.y + 50)
   }
   ctx.restore()
@@ -123,51 +120,6 @@ function wrapLines(ctx: CanvasRenderingContext2D, text: string, maxWidth: number
   return lines
 }
 
-export function drawTowerReferencePanel(ctx: CanvasRenderingContext2D, width: number, height: number) {
-  const bounds = drawPanelChrome(ctx, width, height, 'T O W E R S')
-
-  const cols = 2
-  const rows = Math.ceil(TOWER_DEFINITIONS.length / cols)
-  const padding = 22
-  const contentX = bounds.x + padding
-  const contentY = bounds.y + 58
-  const contentW = bounds.width - padding * 2
-  const contentH = bounds.height - 58 - padding
-  const cellW = contentW / cols
-  const cellH = contentH / rows
-
-  TOWER_DEFINITIONS.forEach((def, i) => {
-    const col = i % cols
-    const row = Math.floor(i / cols)
-    const cellX = contentX + col * cellW
-    const cellY = contentY + row * cellH
-    const iconCenter = { x: cellX + 26, y: cellY + cellH / 2 }
-    const textX = cellX + 60
-    const textW = cellW - 76
-
-    drawTowerPreview(ctx, def.kind, iconCenter, TOWER_UNSELECTED_COLOR)
-
-    ctx.save()
-    ctx.textAlign = 'left'
-    ctx.fillStyle = COLORS.textBright
-    ctx.font = 'bold 13px monospace'
-    ctx.fillText(def.name, textX, cellY + 16)
-
-    ctx.fillStyle = COLORS.textMid
-    ctx.font = '12px monospace'
-    const descLines = wrapLines(ctx, def.description, textW, 2)
-    descLines.forEach((line, li) => ctx.fillText(line, textX, cellY + 34 + li * 13))
-
-    const attackSpeed = (1 / def.fireInterval).toFixed(2)
-    const projectile = def.projectileSpeed ? `${def.projectileSpeed}px/s` : '—'
-    ctx.fillStyle = COLORS.textMid
-    ctx.font = '10px monospace'
-    ctx.fillText(`Damage ${def.damage}  ·  Range ${def.range}px  ·  Consumption ${def.consumption}/s`, textX, cellY + cellH - 22)
-    ctx.fillText(`Rate ${attackSpeed}/s  ·  Projectile ${projectile}`, textX, cellY + cellH - 10)
-    ctx.restore()
-  })
-}
-
 interface RecipeEntry {
   icon: 'triangle' | 'hexagon'
   text: string
@@ -206,12 +158,18 @@ function drawRecipeIcon(ctx: CanvasRenderingContext2D, icon: RecipeEntry['icon']
   else drawHexagonOutline(ctx, x, cy, 3.6, COLORS.textMid, 1.2)
 }
 
-/** Inhalt des Farb-Guide — EIN Eintrag je Farbe, für Tier 3/4 BEIDE Rezept-Varianten (Dreieck UND
+const COLOR_CARD_GAP = 8
+const COLOR_CARD_PADDING = 10
+const COLOR_CARD_ACCENT_WIDTH = 3
+
+/** Inhalt des Farb-Guide — EINE Karte je Farbe (User-Vorgabe: Referenzbild-Karten-Look), farbiger
+ * Akzentstreifen links = Ressourcenfarbe, für Tier 3/4 BEIDE Rezept-Varianten (Dreieck UND
  * Hexagon) übereinander (User-Vorgabe: "beide varianten für t3 und t4 farben sollen angezeigt
- * werden"). Reine Inhalts-Zeichnung ohne Hintergrund/Rahmen/Titel (das übernimmt
- * `drawColorGuidePanel()`) — `x`/`y`/`width`/`height` begrenzen nur den verfügbaren Platz, es wird
- * nicht gescrollt oder abgeschnitten. `resourceList` lässt `drawColorGuidePanel()` die Farben auf
- * 2 Spalten aufteilen (Default = alle Nicht-Spezial-Farben in einer einzigen Liste). */
+ * werden"). main.ts ruft sie direkt in der immer sichtbaren Seitenleiste links vom Raster auf
+ * (User-Vorgabe: "nicht mehr als öffnenbares Popup, sondern immer"), einmal je Sektion (Primary/
+ * Combinations). `x`/`y`/`width`/`height` begrenzen nur den verfügbaren Platz — bricht sauber ab
+ * (kein Scrollen), sobald `height` erreicht ist. Gibt die Y-Position nach der letzten Karte
+ * zurück, damit main.ts die nächste Sektion direkt darunter anschließen kann. */
 export function drawColorGuideList(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -219,97 +177,103 @@ export function drawColorGuideList(
   width: number,
   height: number,
   resourceList: ResourceDefinition[] = RESOURCES.filter((r) => r.tier !== 'special'),
-) {
-  const resources = resourceList
-  const lineHeight = 11
-  const rowGap = 6
+): number {
+  const lineHeight = 14
   let cursorY = y
 
   ctx.save()
   ctx.textAlign = 'left'
 
-  for (const resource of resources) {
+  for (const resource of resourceList) {
     const effect = COLOR_EFFECT_INFO[resource.id]
     const showBoth = resource.tier === 3 || resource.tier === 4
     const recipeEntries = showBoth
       ? [triangleRecipeEntry(resource), hexagonRecipeEntry(resource)].filter((r): r is RecipeEntry => !!r)
       : [triangleRecipeEntry(resource) ?? hexagonRecipeEntry(resource)].filter((r): r is RecipeEntry => !!r)
 
-    const swatchY = cursorY + 6
-    drawCircle(ctx, x + 7, swatchY, 7, resource.color, 6)
-    drawCircleOutline(ctx, x + 7, swatchY, 7, COLORS.gridLineStrong, 1, 0)
+    // Höhe erst BERECHNEN (braucht die fertig umgebrochenen Effekt-Zeilen), dann die Karte
+    // zeichnen, dann den Inhalt darüber — sonst wüsste die Karte ihre eigene Höhe nicht im Voraus.
+    ctx.font = '10px monospace'
+    const effectLines = effect ? wrapLines(ctx, `${effect.name}: ${effect.description}`, width - COLOR_CARD_PADDING * 2 - 12, 2) : []
+    const recipeLineCount = recipeEntries.length === 0 ? 1 : recipeEntries.length
+    const contentLines = recipeLineCount + effectLines.length
+    const cardHeight = COLOR_CARD_PADDING * 2 + 16 + contentLines * lineHeight
 
+    if (cursorY + cardHeight > y + height) break // Sicherheitsbremse, sollte bei normaler Fenstergröße nie greifen
+
+    drawCard(ctx, x, cursorY, width, cardHeight)
+    ctx.fillStyle = resource.color
+    ctx.fillRect(x, cursorY, COLOR_CARD_ACCENT_WIDTH, cardHeight)
+
+    const textX = x + COLOR_CARD_PADDING + 10
+    const swatchX = x + COLOR_CARD_PADDING + 3
+    let lineY = cursorY + COLOR_CARD_PADDING + 8
+
+    drawCircle(ctx, swatchX, lineY - 3, 6, resource.color, 6)
+    drawCircleOutline(ctx, swatchX, lineY - 3, 6, COLORS.gridLineStrong, 1, 0)
     ctx.fillStyle = readableTextColor(resource.color)
-    ctx.font = 'bold 11px monospace'
-    ctx.fillText(resource.name, x + 20, swatchY + 4)
-    cursorY = swatchY + lineHeight
+    ctx.font = 'bold 12px monospace'
+    ctx.fillText(resource.name, textX, lineY)
+    lineY += lineHeight
 
-    ctx.font = '9px monospace'
+    ctx.font = '10px monospace'
     if (recipeEntries.length === 0) {
       ctx.fillStyle = COLORS.textDim
-      ctx.fillText('Purchased', x + 20, cursorY)
-      cursorY += lineHeight
+      ctx.fillText('Purchased', textX, lineY)
+      lineY += lineHeight
     } else {
       for (const entry of recipeEntries) {
-        drawRecipeIcon(ctx, entry.icon, x + 7, cursorY)
+        drawRecipeIcon(ctx, entry.icon, swatchX, lineY)
         ctx.fillStyle = COLORS.textMid
-        ctx.fillText(entry.text, x + 20, cursorY)
-        cursorY += lineHeight
+        ctx.fillText(entry.text, textX, lineY)
+        lineY += lineHeight
       }
     }
 
-    if (effect) {
-      ctx.fillStyle = COLORS.textMid
-      const lines = wrapLines(ctx, `${effect.name}: ${effect.description}`, width - 20, 2)
-      lines.forEach((line) => {
-        ctx.fillText(line, x + 20, cursorY)
-        cursorY += lineHeight
-      })
+    ctx.fillStyle = COLORS.textMid
+    for (const line of effectLines) {
+      ctx.fillText(line, textX, lineY)
+      lineY += lineHeight
     }
 
-    cursorY += rowGap
-    if (cursorY > y + height) break // Sicherheitsbremse, sollte bei normaler Fenstergröße nie greifen
-
-    ctx.strokeStyle = COLORS.gridLine
-    ctx.lineWidth = 1
-    ctx.beginPath()
-    ctx.moveTo(x, cursorY - rowGap / 2)
-    ctx.lineTo(x + width, cursorY - rowGap / 2)
-    ctx.stroke()
+    cursorY += cardHeight + COLOR_CARD_GAP
   }
 
   ctx.restore()
+  return cursorY
 }
 
-/** Farb-Guide als eigenes blockierendes Modal (User-Vorgabe seit der Zusammenlegung auf ein
- * gemeinsames Raster: das feste Mittel-Feld zwischen Economy/Defense, in dem der Guide früher als
- * nicht-blockierendes Feld lebte, gibt es nicht mehr — dieselbe Chrome wie `drawTowerReferencePanel()`,
- * geöffnet über das neue "Colors"-Icon in der Kauf-Leiste, siehe towerRender.ts). Teilt die Farben
- * auf 2 Spalten auf, damit die Liste in der Modal-Höhe Platz hat, statt in einer einzigen, sehr
- * hohen Spalte zu laufen. */
-export function drawColorGuidePanel(ctx: CanvasRenderingContext2D, width: number, height: number) {
-  const bounds = drawPanelChrome(ctx, width, height, 'C O L O R   G U I D E')
+/** Kopf der Farb-Guide-Seitenleiste (User-Vorgabe, Referenzbild: Titel + kurze Unterzeile) — die
+ * beiden Abschnitte darunter (Primary/Combinations) bekommen ihre eigene, kleinere Überschrift
+ * (siehe drawColorSectionHeader()), die Listen selbst sind drawColorGuideList()-Aufrufe. */
+export function drawColorGuideSidebarTitle(ctx: CanvasRenderingContext2D, x: number, y: number) {
+  ctx.save()
+  ctx.textAlign = 'left'
+  ctx.fillStyle = COLORS.textBright
+  ctx.font = 'bold 15px monospace'
+  ctx.fillText('Colors & Combinations', x, y)
+  ctx.fillStyle = COLORS.textDim
+  ctx.font = '11px monospace'
+  ctx.fillText('Combine colors to create powerful towers', x, y + 18)
+  ctx.restore()
+}
 
-  const all = RESOURCES.filter((r) => r.tier !== 'special')
-  const mid = Math.ceil(all.length / 2)
-  const left = all.slice(0, mid)
-  const right = all.slice(mid)
-
-  const columnWidth = 340
-  const columnGap = 40
-  const startX = bounds.x + (bounds.width - (columnWidth * 2 + columnGap)) / 2
-  const contentY = bounds.y + 58
-  const contentHeight = bounds.height - 58 - 20
-
-  drawColorGuideList(ctx, startX, contentY, columnWidth, contentHeight, left)
-  drawColorGuideList(ctx, startX + columnWidth + columnGap, contentY, columnWidth, contentHeight, right)
+/** Kleine Abschnitts-Überschrift innerhalb der Farb-Guide-Seitenleiste ("PRIMARY COLORS" /
+ * "COLOR COMBINATIONS", siehe main.ts drawLeftSidebar()). */
+export function drawColorSectionHeader(ctx: CanvasRenderingContext2D, x: number, y: number, label: string) {
+  ctx.save()
+  ctx.textAlign = 'left'
+  ctx.fillStyle = COLORS.textDim
+  ctx.font = 'bold 11px monospace'
+  ctx.fillText(label.toUpperCase(), x, y)
+  ctx.restore()
 }
 
 const QUICK_START_STEPS: { title: string; body: string }[] = [
   { title: '1. Generate Light', body: 'Place Cyan, Magenta, and Yellow sources to create light beams.' },
   {
     title: '2. Mix Colors',
-    body: 'Use prisms to combine colors into stronger resources. Triangle prisms mix 2 colors, Hexagon prisms mix up to 5. Check the Color Guide (the icon in the build bar) for what mixes into what.',
+    body: 'Use prisms to combine colors into stronger resources. Triangle prisms mix 2 colors, Hexagon prisms mix up to 5. Check the Color Guide (left of the grid) for what mixes into what.',
   },
   { title: '3. Build Towers', body: 'Choose a tower type and place it anywhere on the shared grid.' },
   {
@@ -318,7 +282,11 @@ const QUICK_START_STEPS: { title: string; body: string }[] = [
   },
   {
     title: '5. Defend',
-    body: 'Stop enemies before they reach the end. Every building blocks their path, not just towers, so plan your layout carefully. Use mirrors to redirect the enemy path — and your light beams.',
+    body: 'Enemies march toward the fixed stone above the grid — click it to rotate which way it casts its path. Every building blocks the path, and the path itself blocks light beams crossing it, so plan your layout carefully. Use mirrors to redirect both the enemy path and your light beams.',
+  },
+  {
+    title: '6. Protect Your Base',
+    body: 'Every enemy that reaches the stone costs Base HP (bosses cost much more) — waves always keep advancing. At 0 HP the run resets to Wave 1 with full HP, but your buildings and currency are kept.',
   },
 ]
 
@@ -336,12 +304,12 @@ export function drawWelcomePanel(ctx: CanvasRenderingContext2D, width: number, h
   ctx.textAlign = 'left'
   for (const step of QUICK_START_STEPS) {
     ctx.fillStyle = COLORS.textBright
-    ctx.font = 'bold 14px monospace'
+    ctx.font = 'bold 15px monospace'
     ctx.fillText(step.title, contentX, cursorY)
     cursorY += 20
 
     ctx.fillStyle = COLORS.textMid
-    ctx.font = '12px monospace'
+    ctx.font = '13px monospace'
     const lines = wrapLines(ctx, step.body, contentW, 3)
     lines.forEach((line) => {
       ctx.fillText(line, contentX, cursorY)
@@ -354,7 +322,7 @@ export function drawWelcomePanel(ctx: CanvasRenderingContext2D, width: number, h
   ctx.save()
   ctx.textAlign = 'center'
   ctx.fillStyle = COLORS.textBright
-  ctx.font = 'bold 15px monospace'
+  ctx.font = 'bold 16px monospace'
   ctx.fillText('Mix.  Build.  Defend.', bounds.x + bounds.width / 2, bounds.y + bounds.height - 24)
   ctx.restore()
 }

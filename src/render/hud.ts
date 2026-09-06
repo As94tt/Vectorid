@@ -1,16 +1,19 @@
 import { COLORS } from '../constants/colors'
 import { RESOURCES } from '../data/resources'
 import { getBalance, type Inventory } from '../economy/inventory'
+import { drawCard, drawCheatIcon, drawDemolishIcon, drawMenuIcon, drawSaveIcon, drawSettingsIcon } from './ui'
 
 // Globale Kopfzeile: Spielername/Level, Lumen-/Prisma-Bestand, Einstellungen/Speichern (noch ohne
-// Funktion) und ein Cheat-Button (+100 auf alles). Komplett Canvas-gezeichnet, damit dieselbe
-// Pointer-Event-Interaktion wie im Rest des Spiels genutzt werden kann (kein Mischen von
-// DOM-Buttons und Canvas-Dragging).
+// Funktion), Menü (ebenfalls ohne Funktion, nur Referenzbild-Parität) und ein Cheat-Button (+100
+// auf alles). Komplett Canvas-gezeichnet, damit dieselbe Pointer-Event-Interaktion wie im Rest des
+// Spiels genutzt werden kann (kein Mischen von DOM-Buttons und Canvas-Dragging).
 
-export const HUD_HEIGHT = 52
+// User-Vorgabe: höher, damit Titel/Tagline-Zeile UND die (jetzt kartenförmigen) Buttons bequem
+// Platz haben — vorher reine Text-Buttons in einer knappen 52px-Zeile.
+export const HUD_HEIGHT = 64
 
 export interface HudButton {
-  id: 'settings' | 'save' | 'cheat' | 'demolish'
+  id: 'settings' | 'save' | 'cheat' | 'demolish' | 'menu'
   label: string
   x: number
   y: number
@@ -18,28 +21,38 @@ export interface HudButton {
   height: number
 }
 
+const ICON_DRAWERS: Record<HudButton['id'], typeof drawSaveIcon> = {
+  save: drawSaveIcon,
+  settings: drawSettingsIcon,
+  menu: drawMenuIcon,
+  cheat: drawCheatIcon,
+  demolish: drawDemolishIcon,
+}
+
 export function buildHudButtons(canvasWidth: number): HudButton[] {
-  const width = 110
-  const height = 30
+  const width = 108
+  const height = 40
   const y = (HUD_HEIGHT - height) / 2
   const gap = 10
-  const rightPadding = 16
+  const rightPadding = 20
   // "ABRISS" steht bewusst GANZ links in dieser Reihe (letzter Eintrag -> kleinstes x, siehe
   // Positionsformel unten) — im HUD statt in einer der beiden Kauf-Leisten, die schon eng
-  // gepackt sind (10/12 Icons, siehe CLAUDE.md), UND weil der Modus für BEIDE Seiten gleichzeitig
-  // gilt (Economy-Gebäude UND Türme), nicht nur für eine.
+  // gepackt sind, UND weil der Modus für BEIDE Seiten gleichzeitig gilt (Economy-Gebäude UND
+  // Türme), nicht nur für eine. "MENU" ganz rechts, dem Referenzbild entsprechend, ohne Funktion
+  // (User-Vorgabe: reine Optik-Parität, wie SETTINGS/SAVE).
   const order: { id: HudButton['id']; label: string }[] = [
-    { id: 'settings', label: 'SETTINGS' },
-    { id: 'save', label: 'SAVE' },
-    { id: 'cheat', label: 'CHEAT +100' },
     { id: 'demolish', label: 'DEMOLISH' },
+    { id: 'cheat', label: 'CHEAT' },
+    { id: 'save', label: 'SAVE' },
+    { id: 'settings', label: 'SETTINGS' },
+    { id: 'menu', label: 'MENU' },
   ]
   return order.map((o, i) => ({
     ...o,
     width,
     height,
     y,
-    x: canvasWidth - rightPadding - (i + 1) * width - i * gap,
+    x: canvasWidth - rightPadding - (order.length - i) * width - (order.length - 1 - i) * gap,
   }))
 }
 
@@ -49,15 +62,17 @@ export function hitTestButton(button: { x: number; y: number; width: number; hei
 
 function drawButton(ctx: CanvasRenderingContext2D, button: HudButton, active: boolean) {
   const color = active ? '#ff3355' : COLORS.textBright
+  drawCard(ctx, button.x, button.y, button.width, button.height, active)
+  const iconX = button.x + 22
+  const iconY = button.y + button.height / 2
+  ICON_DRAWERS[button.id](ctx, iconX, iconY, 8, color)
+
   ctx.save()
-  ctx.strokeStyle = color
-  ctx.lineWidth = 1.5
-  ctx.strokeRect(button.x, button.y, button.width, button.height)
   ctx.fillStyle = color
   ctx.font = '11px monospace'
-  ctx.textAlign = 'center'
+  ctx.textAlign = 'left'
   ctx.textBaseline = 'middle'
-  ctx.fillText(active ? 'DEMOLISH: ON' : button.label, button.x + button.width / 2, button.y + button.height / 2 + 1)
+  ctx.fillText(active ? 'ON' : button.label, iconX + 16, iconY + 1)
   ctx.restore()
 }
 
@@ -86,11 +101,19 @@ export function drawHud(
   ctx.save()
   ctx.textBaseline = 'middle'
   ctx.fillStyle = COLORS.textBright
-  ctx.font = 'bold 13px monospace'
-  ctx.fillText(playerName, 20, midY)
+  ctx.font = 'bold 15px monospace'
+  ctx.fillText(playerName, 20, HUD_HEIGHT * 0.36)
+  // Bugfix: Breite MUSS mit der noch aktiven (fetten 15px-) Schriftart gemessen werden, bevor auf
+  // die kleinere LVL-Schriftart gewechselt wird — sonst kommt ein zu kleiner (falscher) Wert
+  // heraus und "LVL" rückt zu dicht an den Namen heran.
+  const nameWidth = ctx.measureText(playerName).width
   ctx.fillStyle = COLORS.textDim
-  ctx.font = '11px monospace'
-  ctx.fillText(`LVL ${level}`, 20 + ctx.measureText(playerName).width + 16, midY)
+  ctx.font = '12px monospace'
+  ctx.fillText(`LVL ${level}`, 20 + nameWidth + 16, HUD_HEIGHT * 0.36)
+  // User-Vorgabe: Referenzbild-Tagline unter Name/Level.
+  ctx.fillStyle = COLORS.accent
+  ctx.font = '10px monospace'
+  ctx.fillText('DEFEND · COMBINE · EVOLVE', 20, HUD_HEIGHT * 0.72)
   ctx.restore()
 
   // Ressourcenliste ist auf den Bereich links der Buttons begrenzt (clip), sonst würde eine
@@ -107,7 +130,7 @@ export function drawHud(
   ctx.rect(210, 0, Math.max(0, maxX - 210), HUD_HEIGHT)
   ctx.clip()
   ctx.textBaseline = 'middle'
-  ctx.font = '11px monospace'
+  ctx.font = '12px monospace'
   let cursor = 220
   let shown = 0
   for (const resource of visible) {
@@ -129,7 +152,7 @@ export function drawHud(
   if (shown < visible.length) {
     ctx.save()
     ctx.textBaseline = 'middle'
-    ctx.font = '11px monospace'
+    ctx.font = '12px monospace'
     ctx.fillStyle = COLORS.textDim
     ctx.fillText(`+${visible.length - shown}`, maxX + 4, midY)
     ctx.restore()

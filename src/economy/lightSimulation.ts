@@ -74,6 +74,18 @@
 // "erster gewinnt"-Reihenfolge, mit der Container früher ihre Kapazitäts-Slots vergeben haben).
 // Anders als ein Dreieck-Prisma nimmt ein Turm einen Strahl aus JEDER der 6 Richtungen an (wie ein
 // Hexagon-Prisma) — er hat keine "Seiten", die eine Form vorgeben.
+//
+// Gegner-Pfad als Strahl-Hindernis (User-Vorgabe: "die Farbverbindungen sollen vom Weg der Enemies
+// geblockt werden, nicht andersherum" — der Gegner-Pfad selbst hängt NICHT von Strahlen ab, siehe
+// grid/routing.ts): main.ts übergibt die aktuelle Pfad-Zellkette als `enemyPathCells`, jede dieser
+// Zellen wirkt wie ein blankes Gebäude — ein Strahl stoppt eine Zelle davor, wirkungslos, kommt
+// also nie an einem Prisma/Turm an (siehe `hitPrism`/`hitTower` bleiben unbesetzt). Das gilt AUCH
+// für eine Zelle mit Spiegel darauf (User-Vorgabe/Bugfix: "kann keine Farbverbindung in dieses
+// Feld rein oder raus, es ist praktisch blockiert") — läuft der Gegner-Pfad gerade durch einen
+// Spiegel, blockiert das Licht dort komplett, statt (wie zuvor fälschlich) trotzdem umgelenkt zu
+// werden (siehe `buildLookup()`s Einfüge-Reihenfolge). Lichtquellen/Prismen/Türme sind davon
+// NICHT betroffen — der Pfad endet ja ohnehin genau auf ihrer eigenen Zelle, die bleibt ihr
+// gültiges Licht-Ziel/-Quelle.
 
 import { RESOURCES, getResource, type ResourceDefinition } from '../data/resources'
 import { cellKey, hexNeighbor, inBounds, type GridCoord, type HexDirection, type PlacementGrid } from '../grid/placementGrid'
@@ -132,12 +144,35 @@ interface TowerOccupant {
   kind: 'tower'
   id: string
 }
-type LightOccupant = EconomyBuilding | TowerOccupant
+/** Der Gegner-Pfad als Strahl-Hindernis (User-Vorgabe: "die Farbverbindungen sollen vom Weg der
+ * Enemies geblockt werden, nicht andersherum") — trägt keine weiteren Daten, nur die Zell-Präsenz
+ * zählt. Wird in `buildLookup()` VOR den echten Gebäuden eingetragen, damit ein Gebäude, das
+ * zufällig auf einer Pfad-Zelle steht, seinen eigenen (wichtigeren) Occupant-Eintrag behält. */
+interface PathOccupant {
+  kind: 'path'
+}
+type LightOccupant = EconomyBuilding | TowerOccupant | PathOccupant
 
-function buildLookup(sources: LightSource[], mirrors: Mirror[], prisms: Prism[], towers: { id: string; col: number; row: number }[]): Map<string, LightOccupant> {
+function buildLookup(
+  sources: LightSource[],
+  mirrors: Mirror[],
+  prisms: Prism[],
+  towers: { id: string; col: number; row: number }[],
+  enemyPathCells: GridCoord[],
+): Map<string, LightOccupant> {
   const map = new Map<string, LightOccupant>()
-  for (const s of sources) map.set(cellKey(s), s)
+  // User-Vorgabe (Bugfix): "geht der Enemy-Weg durch ein Feld, kann keine Farbverbindung in
+  // dieses Feld rein oder raus, es ist praktisch blockiert" — GILT AUCH für ein Feld mit Spiegel
+  // darauf (vorher fälschlich ausgenommen: Spiegel wurden NACH den Pfad-Zellen eingetragen und
+  // haben sie damit wieder überschrieben, sodass Licht dort trotzdem ungehindert umgelenkt wurde).
+  // Reihenfolge jetzt: Spiegel zuerst (niedrigste Priorität) -> Pfad-Zellen überschreiben einen
+  // Spiegel auf dem Weg zu einem reinen Blocker -> Gebäude (Quelle/Prisma/Turm) überschreiben
+  // eine Pfad-Zelle wieder zurück auf sich selbst (der Pfad endet ja ohnehin GENAU auf ihrer
+  // eigenen Zelle, siehe grid/routing.ts traceDefensePath() — die müssen als Licht-Ziel/-Quelle
+  // weiter funktionieren, nur Spiegel sollen blockierbar sein).
   for (const m of mirrors) map.set(cellKey(m), m)
+  for (const c of enemyPathCells) map.set(cellKey(c), { kind: 'path' })
+  for (const s of sources) map.set(cellKey(s), s)
   for (const p of prisms) map.set(cellKey(p), p)
   for (const t of towers) map.set(cellKey(t), { kind: 'tower', id: t.id })
   return map
@@ -291,6 +326,12 @@ function traceAllFronts(grid: PlacementGrid, lookup: Map<string, LightOccupant>,
         front.alive = false
         front.reachedEndpoint = true
         front.hitTower = { towerId: occupant.id, resourceId: front.resourceId, strength: front.stepsLeft }
+        continue
+      }
+      if (occupant.kind === 'path') {
+        // Gegner-Pfad blockiert wirkungslos, genau wie ein Gebäude — der Strahl stoppt EINE Zelle
+        // davor (kein `front.cells.push(next)`, siehe die anderen Hindernis-Fälle unten).
+        front.alive = false
         continue
       }
       if (occupant.kind === 'prism') {
@@ -483,8 +524,9 @@ export function simulateLight(
   mirrors: Mirror[],
   prisms: Prism[],
   towers: { id: string; col: number; row: number }[],
+  enemyPathCells: GridCoord[],
 ): SimulationResult {
-  const lookup = buildLookup(sources, mirrors, prisms, towers)
+  const lookup = buildLookup(sources, mirrors, prisms, towers, enemyPathCells)
 
   let prismOutputs = new Map<string, ResourceDefinition | null>(prisms.map((p) => [p.id, null]))
   // Effektive Output-Richtung je Prisma — Default = die per Klick gewählte Rotation

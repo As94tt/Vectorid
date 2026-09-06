@@ -210,6 +210,24 @@ export function activeStatusEffects(enemy: Enemy, elapsedSeconds: number): { res
   return list
 }
 
+/** Für die "aktuelle Stacks"-Zeile unter der Boss-HP (siehe main.ts drawWaveStatus(), User-
+ * Vorgabe) — anders als activeStatusEffects() die ROHE Stack-Zahl (nicht der Füllstand als
+ * Bruchteil 0-1), da die Anzeige explizit "Anzahl der Stacks" zeigen soll. Cyan bleibt hier
+ * bewusst außen vor (kein echter Stack-Zähler, nur ein Zeitstempel), ebenso Magenta/Yellow/
+ * Chartreuse/Aquamarine/White (kein eigener Stack-Pool). */
+export function activeStackCounts(enemy: Enemy, elapsedSeconds: number): { resourceId: string; count: number }[] {
+  const list: { resourceId: string; count: number }[] = []
+  if (enemy.blueStacks > 0) list.push({ resourceId: 'blue', count: Math.round(enemy.blueStacks) })
+  if (enemy.redStacks > 0) list.push({ resourceId: 'red', count: Math.round(enemy.redStacks) })
+  if (enemy.greenStacks > 0) list.push({ resourceId: 'green', count: Math.round(enemy.greenStacks) })
+  if (enemy.ceruleanStacks > 0) list.push({ resourceId: 'cerulean', count: Math.round(enemy.ceruleanStacks) })
+  if (enemy.violetStacks > 0) list.push({ resourceId: 'violet', count: Math.round(enemy.violetStacks) })
+  if (enemy.fuchsiaStacks > 0) list.push({ resourceId: 'fuchsia', count: Math.round(enemy.fuchsiaStacks) })
+  if (enemy.amberStacks > 0) list.push({ resourceId: 'amber', count: Math.round(enemy.amberStacks) })
+  if (enemy.blackStacksExpireAt > elapsedSeconds && enemy.blackStacks > 0) list.push({ resourceId: 'black', count: Math.round(enemy.blackStacks) })
+  return list
+}
+
 export interface PruneResult {
   remaining: Enemy[]
   killed: Enemy[]

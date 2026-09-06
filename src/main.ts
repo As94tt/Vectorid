@@ -1,4 +1,4 @@
-import { COLORS } from './constants/colors'
+import { COLORS, readableTextColor } from './constants/colors'
 import { startGameLoop } from './core/gameLoop'
 import {
   BUILDING_COSTS,
@@ -23,6 +23,8 @@ import {
   gridPixelHeight,
   gridPixelWidth,
   GRID_EXPAND_COST,
+  hexColumnWidth,
+  hexNeighbor,
   inBounds,
   nearestCell,
   type GridCoord,
@@ -66,13 +68,14 @@ import {
 } from './render/towerRender'
 import { getEffectiveTowerStats, createTower, getTowerDefinition, loadoutKey, towerUpgradeCost, TOWER_DEFINITIONS, TOWER_MAX_LEVEL, type PlacedTower, type TowerKind } from './towerdefense/towers'
 import { getResource, RESOURCES } from './data/resources'
-import { drawHexagon, drawLabel } from './render/shapes'
+import { drawLabel } from './render/shapes'
 import { drawPath, pathTotalLength, type Point } from './towerdefense/path'
 import { updateProjectiles, updateTowers, pruneVisualEffects, type Projectile, type VisualEffect } from './towerdefense/combat'
-import { pruneEnemies, tickEnemy, type Enemy } from './towerdefense/enemies'
-import { createWaveState, isBossWave, registerLeak, tickWaveSpawning, waveEnemyHp, BOSS_LUMEN_MULTIPLIER, type WaveState } from './towerdefense/waves'
+import { activeStackCounts, pruneEnemies, tickEnemy, type Enemy } from './towerdefense/enemies'
+import { createWaveState, isBossWave, tickWaveSpawning, BOSS_LUMEN_MULTIPLIER, BOSS_WAVE_PAUSE_SECONDS, WAVE_PAUSE_SECONDS, type WaveState } from './towerdefense/waves'
 import { drawEnemies, drawProjectiles, drawTowerCombatEffects, drawVisualEffects } from './render/combatRender'
-import { drawColorGuidePanel, drawTowerReferencePanel, drawWelcomePanel, hitTestReferencePanelClose } from './render/referencePanels'
+import { drawColorGuideList, drawColorGuideSidebarTitle, drawColorSectionHeader, drawWelcomePanel, hitTestReferencePanelClose } from './render/referencePanels'
+import { drawCard, drawHeartIcon, drawProgressBar, drawSkullIcon, healthFractionColor } from './render/ui'
 
 const canvas = document.getElementById('scene') as HTMLCanvasElement
 const ctx = canvas.getContext('2d')
@@ -88,10 +91,6 @@ const playerLevel = 1
 let hudButtons: HudButton[] = []
 let paletteItems: PaletteItem[] = []
 
-// Nachschlage-Seiten (blockierende Modals, siehe render/referencePanels.ts): "Türme" listet alle
-// Turmtypen, der Farb-Guide alle Farben (aus dem jeweiligen Icon der Kauf-Leiste geöffnet).
-let towersInfoOpen = false
-let colorGuideOpen = false
 
 // Einmaliges Tutorial-Popup (User-Vorgabe: "beim ersten starten") — merkt sich per localStorage,
 // ob es schon gezeigt wurde, damit es bei künftigen Besuchen nicht erneut aufploppt (versucht
@@ -113,33 +112,27 @@ function markTutorialSeen() {
 }
 let welcomeOpen = !hasSeenTutorial()
 
-// Info-Panel (Klick auf ein Gebäude/einen Turm): zeigt Name/Level/Produktionsdaten bzw.
-// Name/Munition/Level. Blockiert alle anderen Interaktionen, solange offen.
+// Auswahl (Klick auf ein Gebäude/einen Turm): zeigt Name/Level/Produktionsdaten bzw.
+// Name/Munition/Level in der "SELECTED"-Karte der rechten Seitenleiste (siehe drawRightSidebar())
+// — anders als das frühere schwebende Info-Panel NICHT mehr blockierend, der Rest des Spiels
+// bleibt bedienbar, solange etwas ausgewählt ist (User-Vorgabe, Referenzbild).
 interface InfoTarget {
   kind: 'source' | 'tower'
   id: string
 }
-interface InfoPanelRow {
-  label: string
-  value: string
-  y: number
-  height: number
-  /** 'level' versucht ein Level-Up (siehe attemptLevelUp() weiter unten) — über denselben
-   * klickbaren-Zeile-Mechanismus wie überall sonst in diesem Panel. Türme haben kein 'ammo'-Row-
-   * Action mehr (User-Vorgabe: Munition kommt jetzt rein aus der Strahl-Verkabelung, siehe
-   * economyTick()) — die "Ammo"-Zeile ist nur noch Anzeige. */
-  action?: 'level'
-}
-interface InfoPanelLayout {
+let infoTarget: InfoTarget | null = null
+
+/** UPGRADE/SELL/Schließen-Knöpfe der "SELECTED"-Karte — wie `hudButtons` ein pro Frame beim
+ * Zeichnen neu befülltes Array, in Bildschirm-Koordinaten (die Seitenleiste liegt außerhalb von
+ * render()s Welt-ctx.translate), per hitTestButton() aus render/hud.ts wiederverwendet. */
+interface SidebarButton {
+  id: 'upgrade' | 'sell' | 'close'
   x: number
   y: number
   width: number
   height: number
-  closeButton: { x: number; y: number; size: number }
-  rows: InfoPanelRow[]
 }
-let infoTarget: InfoTarget | null = null
-let infoPanelLayout: InfoPanelLayout | null = null
+let sidebarButtons: SidebarButton[] = []
 
 // Abriss-Modus (User-Wunsch: Gebäude/Türme wieder löschen können, Lumen wird zurückerstattet).
 // Ein Toggle-Icon in der Kauf-Leiste schaltet den Modus ein/aus — solange aktiv, löscht ein Klick
@@ -149,7 +142,7 @@ let demolishMode = false
 /** Klick vs. Halten+Ziehen auf Generator-Innenkreis/Producer-/Turm-Körper: erst nach dem
  * Loslassen entscheiden, ob es ein Klick (Info-Panel) oder ein Ziehen (Verschieben) war. */
 interface PendingPress {
-  kind: 'source' | 'mirror' | 'prism' | 'tower' | 'spawn'
+  kind: 'source' | 'mirror' | 'prism' | 'tower'
   id: string
   downPos: Point
 }
@@ -169,16 +162,25 @@ function nextTowerId(): string {
   return `tower-${towerCounter}`
 }
 
-/** Eine einzige kombinierte Kauf-Leiste (User-Vorgabe: "alles auf einem Grid" statt getrennter
- * Economy-/Defense-Reihen) — `buildPalette()` liefert die ersten Einträge (Lichtquellen/Spiegel/
- * Prismen), `buildTowerPalette()` reiht direkt danach die Turmtypen + Grid-Erweiterung/Info-Icons
- * an (`startX` verschoben um genau `paletteItems.length` Positionen). */
+/** Zwei Reihen der kombinierten Kauf-Leiste (User-Vorgabe: Türme oben, Economy-Bauteile
+ * darunter, beide in Karten-Optik, siehe render/ui.ts drawCard()) — jede Reihe unabhängig auf
+ * `width/2` zentriert (User-Vorgabe: Endpunkt-Stein soll exakt mit der Kauf-Leisten-Mitte
+ * fluchten, siehe buildWorld()) statt wie zuvor über eine gemeinsame Trennstrich-Formel. */
 const PALETTE_GAP = 64
+const PALETTE_ROW1_Y = HUD_HEIGHT + 44 // Türme
+const PALETTE_ROW2_Y = HUD_HEIGHT + 128 // Economy-Bauteile
+
+/** Erste Icon-Position, damit `count` Icons im Abstand `gap` symmetrisch um `width/2` zentriert
+ * stehen (egal ob `count` gerade oder ungerade ist). */
+function centeredRowStartX(count: number, gap: number): number {
+  return width / 2 - ((count - 1) / 2) * gap
+}
 
 function buildScene() {
   hudButtons = buildHudButtons(width)
-  paletteItems = buildPalette(56, HUD_HEIGHT + 62, PALETTE_GAP)
-  towerPaletteItems = buildTowerPalette(56 + paletteItems.length * PALETTE_GAP, HUD_HEIGHT + 62, PALETTE_GAP)
+  const economyCount = buildPalette(0, 0, PALETTE_GAP).length
+  paletteItems = buildPalette(centeredRowStartX(economyCount, PALETTE_GAP), PALETTE_ROW2_Y, PALETTE_GAP)
+  towerPaletteItems = buildTowerPalette(centeredRowStartX(TOWER_DEFINITIONS.length, PALETTE_GAP), PALETTE_ROW1_Y, PALETTE_GAP)
 }
 
 // Das gemeinsame Raster (User-Vorgabe: "Instead of having the split between economy and defense,
@@ -196,39 +198,83 @@ let occupancy: Occupancy = new Map()
 let worldReady = false
 let lightSimulation: SimulationResult = { segments: [], prismStatus: new Map(), towerAmmo: new Map(), activeSourceIds: new Set() }
 
-let spawnNode: GridCoord
-let spawnDirection: HexDirection = 0
+// Endpunkt-Stein (User-Vorgabe: "Der Endpunkt soll ein Stein sein, genau in der Mitte oberhalb dem
+// Grid") — ein fester Punkt eine Zeile ÜBER dem eigentlichen Raster (row -1), horizontal zentriert.
+// Anders als der frühere Spawn ist er NICHT verschiebbar, nur seine Abstrahlrichtung ist per Klick
+// drehbar (`endpointDirection`). Da die Rasterbreite immer gerade ist (6/8/10/…/20, siehe
+// expandGrid()), fällt die exakte Mitte zwischen zwei Spalten — row -1 hat ungerade Zeilen-Parität
+// (siehe placementGrid.ts rowParity()), deren Verschiebung um eine halbe Spaltenbreite genau das
+// ausgleicht: col = cols/2 - 1 (ganzzahlig) landet an derselben Pixel-Position wie "Spalte 2.5" in
+// einer geraden Zeile — exakt die geometrische Mitte, unabhängig von der aktuellen Rasterbreite.
+let endpointDirection: HexDirection = 4 // zeigt zu Beginn ins Rasterinnere (nach unten)
+
+function endpointNode(): GridCoord {
+  return { col: placementGrid.cols / 2 - 1, row: -1 }
+}
+
+/** Nächste Richtung ab `from` (im Uhrzeigersinn), deren allererster Schritt tatsächlich ins Raster
+ * hineinführt — Klick auf den Stein soll IMMER einen sichtbaren Pfad ergeben. Da der Stein eine
+ * Zeile ÜBER dem Raster sitzt, führen nur 2 der 6 Richtungen überhaupt nach unten hinein (die
+ * anderen 4 blieben in Zeile -1 oder gingen weiter nach oben weg) — ein simples "+1" würde also
+ * die meiste Zeit in einem unsichtbaren Nullweg landen. */
+function nextValidEndpointDirection(from: HexDirection): HexDirection {
+  for (let i = 1; i <= 6; i++) {
+    const candidate = ((from + i) % 6) as HexDirection
+    if (inBounds(placementGrid, hexNeighbor(endpointNode(), candidate))) return candidate
+  }
+  return from
+}
+
 let enemyPathPixels: Point[] = []
+/** Zellkette des aktuellen Gegner-Pfads (Reihenfolge Einlauf -> Stein, siehe recomputeEnemyPath())
+ * — die Licht-Simulation braucht diese Rohdaten (nicht die Pixel-Version), um Strahlen zu
+ * blockieren, die den Pfad kreuzen würden (siehe recomputeLightSimulation(), User-Vorgabe: "die
+ * farbverbindungen sollen vom weg der enemies geblockt werden"). */
+let enemyPathCells: GridCoord[] = []
 /** Gesamtlänge des aktuellen Pfads in Pixeln — cached, damit tickEnemy() nicht jeden Frame für
  * jeden Gegner neu über den ganzen Pfad summieren muss (siehe recomputeEnemyPath()). */
 let enemyPathLength = 0
-/** Id des Gebäudes, an dem der aktuelle Gegner-Pfad endet — `null`, wenn er stattdessen am
- * Rasterrand endet (noch kein Hindernis im Weg). Nur für die "Wand"-Marker-Entscheidung in
- * drawPath() gebraucht (siehe grid/routing.ts DefensePathResult). */
+/** Id des Gebäudes, an dem der aktuelle Gegner-Pfad einläuft (dynamische Spawn-Seite, siehe
+ * recomputeEnemyPath()) — `null`, wenn er stattdessen an der bloßen Wand endet (noch kein
+ * Hindernis im Weg). Nur für die Marker-Entscheidung in drawPath() gebraucht (siehe
+ * grid/routing.ts DefensePathResult). */
 let pathHitBlockerId: string | null = null
 
 function rebuildOccupancy() {
   occupancy = new Map()
-  occupancy.set(cellKey(spawnNode), 'spawn')
   for (const b of [...lightSources, ...mirrors, ...prisms, ...towers]) occupancy.set(cellKey({ col: b.col, row: b.row }), b.id)
 }
 
+/** Licht-Simulation: der aktuelle Gegner-Pfad (`enemyPathCells`) blockiert Strahlen genau wie ein
+ * Gebäude (User-Vorgabe: "die farbverbindungen sollen vom weg der enemies geblockt werden und
+ * nicht anders herum") — Spiegel-Zellen bleiben davon ausgenommen (siehe simulateLight()), da der
+ * Pfad durch sie hindurch umgelenkt wird, genau wie Licht. Muss NACH recomputeEnemyPath()
+ * aufgerufen werden, damit `enemyPathCells` aktuell ist. */
 function recomputeLightSimulation() {
-  lightSimulation = simulateLight(placementGrid, lightSources, mirrors, prisms, towers)
+  lightSimulation = simulateLight(placementGrid, lightSources, mirrors, prisms, towers, enemyPathCells)
 }
 
-/** Gegner-Pfad: strahlt ab `spawnNode` los, Spiegel lenken um, JEDES andere Gebäude (Lichtquelle/
- * Prisma/Turm — User-Vorgabe: "jedes gebäude blockiert den Weg wie ein Turm") beendet den Pfad
- * dort, wie zuvor nur ein Turm. Muss nach JEDER Änderung an Spiegeln/Lichtquellen/Prismen/Türmen
- * neu aufgerufen werden (nicht nur bei Turm-/Spiegel-Änderungen wie vor der Zusammenlegung). */
+/** Gegner-Pfad: strahlt ab dem festen Endpunkt-Stein (`endpointNode()`) los, statt wie zuvor vom
+ * Spawn (User-Vorgabe: "die Linie wird vom Endpunkt und nicht vom Startpunkt erzeugt"). Spiegel
+ * lenken um, JEDES andere Gebäude (Lichtquelle/Prisma/Turm) beendet den Pfad dort — Lichtstrahlen
+ * selbst blockieren den Pfad NICHT (umgekehrt: der Pfad blockiert SIE, siehe
+ * recomputeLightSimulation()). Das Ergebnis wird anschließend umgedreht: `traceDefensePath()`
+ * liefert die Zellkette vom Stein WEG, aber Gegner sollen ja ZUM Stein laufen — nach dem Reverse
+ * ist `enemyPathPixels[0]` die dynamische Einlauf-Stelle (progress 0) und das letzte Element der
+ * feste Stein (progress 1), identisch zum bisherigen "0 = Spawn, 1 = Basis"-Vertrag (siehe
+ * towerdefense/path.ts). Muss nach JEDER Änderung an Spiegeln/Lichtquellen/Prismen/Türmen neu
+ * aufgerufen werden (danach immer auch recomputeLightSimulation(), damit Strahlen den NEUEN Pfad
+ * berücksichtigen). */
 function recomputeEnemyPath() {
   const blockers = [...lightSources, ...prisms, ...towers].map((b) => ({ id: b.id, col: b.col, row: b.row }))
   const lookup = buildDefenseLookup(mirrors, blockers)
   const maxSteps = (placementGrid.cols + placementGrid.rows) * 4 // Sicherheitsbremse gg. Spiegel-Endlosschleife
-  const { cells, hitBlockerId } = traceDefensePath(placementGrid, lookup, spawnNode, spawnDirection, maxSteps)
-  enemyPathPixels = cells.map((c) => cellCenter(placementGrid, c))
+  const { cells, hitBlockerId } = traceDefensePath(placementGrid, lookup, endpointNode(), endpointDirection, maxSteps)
+  enemyPathCells = [...cells].reverse()
+  enemyPathPixels = enemyPathCells.map((c) => cellCenter(placementGrid, c))
   enemyPathLength = pathTotalLength(enemyPathPixels)
   pathHitBlockerId = hitBlockerId
+  recomputeLightSimulation() // Strahlen müssen den ggf. geänderten Pfad sofort als Blocker sehen
 }
 
 function buildingCenter(b: { col: number; row: number }) {
@@ -243,62 +289,120 @@ function canPlaceAt(cell: GridCoord): boolean {
   return inBounds(placementGrid, cell)
 }
 
-function canMoveSpawnTo(cell: GridCoord): boolean {
-  if (!inBounds(placementGrid, cell)) return false
-  const occupant = occupancy.get(cellKey(cell))
-  return !occupant || occupant === 'spawn'
-}
-
 function buildWorld() {
   const cellSize = 34
-  placementGrid = { cols: 7, rows: 7, cellSize, originX: 0, originY: HUD_HEIGHT + 126 }
-  placementGrid.originX = (width - gridPixelWidth(placementGrid)) / 2
+  placementGrid = { cols: 6, rows: 6, cellSize, originX: 0, originY: HUD_HEIGHT + 210 }
+  // User-Vorgabe: der Endpunkt-Stein soll exakt mit dem Kauf-Leisten-Trennstrich fluchten, beide
+  // exakt bildschirmmittig — NICHT die Rasterbox selbst zentrieren (das wäre ein anderer Punkt,
+  // siehe endpointNode()-Kommentar: `endpointX = originX + hexColumnWidth*cols/2`, aufgelöst nach
+  // `originX`). Das Raster selbst verschiebt sich dadurch minimal (~1/4 Spaltenbreite) mit.
+  placementGrid.originX = width / 2 - hexColumnWidth(placementGrid) * (placementGrid.cols / 2)
 
-  spawnNode = { col: 0, row: 0 } // User-Vorgabe: Standard-Startpunkt ist das Feld oben links
-  spawnDirection = 0 // zeigt zu Beginn ins Rasterinnere (Spawn sitzt oben-links)
-
-  // User-Vorgabe: kein Container mehr zum Vorführen des Grundprinzips da — nur EIN Cyan-Generator,
-  // der Spieler verkabelt sich seinen ersten Turm selbst.
-  lightSources = [createLightSource(0, 3, 'cyan')]
-  mirrors = []
-  prisms = []
-  towers = []
+  // User-Vorgabe: feste Startaufstellung nach exakter Zellen-Vorgabe (0-indiziert: Zeile1 ->
+  // row0, Spalte1 -> col0):
+  //   Reihe1: leer, Cyan-Generator(col1), Rapid-Turm(col2), leer, leer, leer
+  //   Reihe2: Spiegel(col0), Dreieck-Prisma(col1), leer, leer, leer, leer
+  //   Reihe3: leer, Yellow-Generator(col1), leer, Pulse-Turm(col3), leer, leer
+  // Cyan strahlt (wie jede Lichtquelle gleichzeitig in alle 6 Richtungen) sowohl direkt in den
+  // Rapid-Turm als auch direkt ins Prisma (2 verschiedene der 6 Richtungen) — der Spiegel liegt
+  // ebenfalls auf einer von Cyans Richtungen, sein umgelenkter Strahl trifft dabei zufällig auf
+  // keine gültige Prisma-Ecke (rein dekorativ, zeigt "Verbindung ohne Ziel" halbtransparent).
+  // Yellow strahlt direkt ins Prisma UND (2 Zellen weiter in derselben Richtung) in den
+  // Pulse-Turm. Prisma-Anker bleibt beim Default (0) stehen — Cyans und Yellows direkte Ecken
+  // (2 bzw. 4) liegen beide im selben Ecken-Set {0,2,4}, das Rezept Cyan+Yellow=Green löst also auf.
+  lightSources = [createLightSource(1, 0, 'cyan'), createLightSource(1, 2, 'yellow')]
+  mirrors = [createMirror(0, 1)]
+  prisms = [createPrism(1, 1, 'triangle')]
+  towers = [createTower(nextTowerId(), 'rapid', 2, 0), createTower(nextTowerId(), 'pulse', 3, 2)]
   enemies = []
   waveState = createWaveState()
 
   rebuildOccupancy()
   worldReady = true
-  recomputeLightSimulation()
-  recomputeEnemyPath()
+  recomputeEnemyPath() // ruft am Ende auch recomputeLightSimulation() auf (siehe dort)
 }
 
-/** Erweitert das gemeinsame Raster um 1 Spalte + 1 Zeile — oben-links bleibt fix verankert (Spawn-
- * Ecke), neue Spalten/Zeilen kommen rechts/unten dazu, keine bestehende Gebäude-Koordinate ändert
- * sich (anders als beim früheren, nach links wachsenden Economy-Raster). */
+/** Erweitert das gemeinsame Raster (User-Vorgabe: "6x6 starten, bis 20x20 — pro Kauf 1 Spalte
+ * LINKS + 1 Spalte RECHTS + 2 Zeilen UNTEN. Ab 20x20 nur noch 1 Zeile unten dran, Breite bleibt
+ * bei 20 begrenzt, nach unten nicht"). Die neue Spalte RECHTS + die 2 neuen Zeilen UNTEN brauchen
+ * keine Anpassung (höhere Indizes sind ohnehin frei) — die neue Spalte LINKS dagegen verschiebt
+ * JEDES bestehende Gebäude um genau 1 Spalte nach rechts (`col += 1`), kompensiert durch
+ * `originX -= hexColumnWidth(...)`, damit sich keine einzige Gebäude-Pixelposition ändert (User-
+ * Vorgabe aus der letzten Runde: "die Gebäude rutschen nach außen" sollte NICHT mehr passieren). */
 function expandGrid() {
   if (!canAfford(inventory, 'prisma', GRID_EXPAND_COST)) return
   spend(inventory, 'prisma', GRID_EXPAND_COST)
-  placementGrid = { ...placementGrid, cols: placementGrid.cols + 1, rows: placementGrid.rows + 1 }
+  if (placementGrid.cols < 20) {
+    placementGrid = { ...placementGrid, cols: Math.min(20, placementGrid.cols + 2), rows: Math.min(20, placementGrid.rows + 2) }
+    placementGrid.originX -= hexColumnWidth(placementGrid)
+    for (const b of [...lightSources, ...mirrors, ...prisms, ...towers]) b.col += 1
+    rebuildOccupancy()
+  } else {
+    placementGrid = { ...placementGrid, rows: placementGrid.rows + 1 }
+  }
   // Der Pfad kann bisher an der jetzt verschobenen Wand geendet haben — mit mehr Platz läuft er
   // ggf. weiter, bis er ein Hindernis trifft oder die NEUE (weiter entfernte) Wand erreicht.
   recomputeEnemyPath()
 }
 
 // Kampf-Simulation: Gegner spawnen wellenweise (siehe towerdefense/waves.ts — 20 Gegner/Welle, 5s
-// Pause danach (10s nach einer Boss-Welle), jede Welle stärker, Boss alle 10 Wellen, Fehlschlag
-// setzt 5 Wellen zurück), Türme feuern automatisch auf Gegner in Reichweite (siehe towerdefense/
+// Pause danach (10s nach einer Boss-Welle), jede Welle stärker, Boss alle 10 Wellen, Wellen laufen
+// immer vorwärts), Türme feuern automatisch auf Gegner in Reichweite (siehe towerdefense/
 // combat.ts). Munition kommt direkt aus der Licht-Simulation (siehe economyTick()) — kein
 // globaler Ratenpool, keine manuelle Auswahl mehr.
 let enemies: Enemy[] = []
 let projectiles: Projectile[] = []
 let visualEffects: VisualEffect[] = []
 let waveState: WaveState = createWaveState()
-/** Summe des tatsächlich abgezogenen Treffer-Schadens je Turm-Konfiguration (Turmart + Munitions-
- * farbe, siehe towerdefense/towers.ts loadoutKey()) — läuft die ganze Session über weiter (auch
- * über Wellen hinweg), auch wenn die zugehörigen Türme später abgerissen werden (siehe main.ts
- * drawTowerLoadoutSummary()). */
+/** Schaden je Turm-Konfiguration (Turmart + Munitionsfarbe, siehe towerdefense/towers.ts
+ * loadoutKey()) NUR für die aktuell laufende Welle (User-Vorgabe, Referenzbild: "TOWER DAMAGE
+ * (THIS WAVE)") — wird bei jedem Wellenwechsel geleert (siehe combatTick(), tickWaveSpawning()
+ * gibt bei einem Wellenwechsel `true` zurück). */
 let damageByLoadout = new Map<string, number>()
 const LUMEN_PER_KILL = 2
+
+// Basis-HP (User-Vorgabe, ersetzt die frühere "Welle nicht geschafft -> 5 Wellen zurück"-Mechanik
+// komplett): jeder durchgekommene Gegner zieht HP ab (Boss deutlich mehr), Wellen laufen dabei
+// immer normal weiter. Bei 0 HP: kurzer Hinweis, dann weicher Reset auf Welle 1 mit voller HP
+// (siehe softResetRun()) — Gebäude/Türme/Lumen/Prisma-Bestand bleiben dabei erhalten.
+const BASE_MAX_HP = 30
+const DAMAGE_PER_LEAK = 1
+const DAMAGE_PER_BOSS_LEAK = 5
+let baseHp = BASE_MAX_HP
+/** Wie viele Gegner der aktuellen Welle bereits "erledigt" sind (getötet ODER durchgekommen) —
+ * für die "N remaining"-Anzeige im HUD (siehe drawRightSidebar()), zusammen mit
+ * `waveState.totalInWave`. Wird bei jedem Wellenwechsel wie `damageByLoadout` geleert. */
+let enemiesResolvedInWave = 0
+/** Kurzer, nicht-blockierender Hinweis nach einem Basis-HP-Reset (siehe softResetRun()) — läuft
+ * einfach nach ein paar Sekunden ab, kein Klick zum Schließen nötig. */
+let baseDestroyedMessageUntil = 0
+
+/** Weicher Reset nach 0 Basis-HP (User-Vorgabe: "Reset auf Welle 1 ... Gebäude/Türme UND Lumen/
+ * Prisma-Bestand bleiben erhalten, nur der Wellen-Fortschritt setzt zurück") — rührt bewusst
+ * NICHT an lightSources/mirrors/prisms/towers/inventory. Kein Neu-Berechnen von Pfad/Licht nötig,
+ * die hängen nur an Gebäuden+Raster, nicht an enemies/Wellenstand. */
+function softResetRun() {
+  waveState = createWaveState()
+  enemies = []
+  projectiles = []
+  visualEffects = []
+  damageByLoadout = new Map()
+  enemiesResolvedInWave = 0
+  baseHp = BASE_MAX_HP
+  baseDestroyedMessageUntil = elapsedSeconds + 3
+}
+
+// Vertikales Scrollen (User-Vorgabe: "ich muss mit dem Mausrad hoch und runter scrollen können,
+// wenn das Feld größer wird als der Bildschirm") — das Raster kann nach unten unbegrenzt wachsen
+// (siehe expandGrid()), der Canvas aber nicht. `cameraOffsetY` verschiebt nur die RENDER-/HIT-TEST-
+// Sicht auf die "Welt" (Raster/Gebäude/Pfad/Gegner) nach unten, während Kauf-Leiste/HUD/Modals
+// (bildschirmfest) unverändert bleiben — siehe render() (ctx.translate) und worldPointerPos().
+let cameraOffsetY = 0
+const BOTTOM_SCROLL_MARGIN = 150
+
+function maxScrollY(): number {
+  return Math.max(0, placementGrid.originY + gridPixelHeight(placementGrid) + BOTTOM_SCROLL_MARGIN - height)
+}
 
 function resize() {
   const dpr = window.devicePixelRatio || 1
@@ -309,21 +413,39 @@ function resize() {
   ctx!.setTransform(dpr, 0, 0, dpr, 0, 0)
   buildScene()
   if (!worldReady) buildWorld()
+  cameraOffsetY = Math.max(0, Math.min(maxScrollY(), cameraOffsetY))
 }
 
 window.addEventListener('resize', resize)
 resize()
 
+canvas.addEventListener(
+  'wheel',
+  (e) => {
+    cameraOffsetY = Math.max(0, Math.min(maxScrollY(), cameraOffsetY + e.deltaY))
+    e.preventDefault()
+  },
+  { passive: false },
+)
+
 // --- Interaktion ---
 // Lichtquelle/Prisma/Turm halten+ziehen = verschieben, kurz antippen = Info-Panel. Spiegel
 // antippen dreht ihn sofort (kein Info-Panel dafür, siehe User-Vorgabe) — halten+ziehen verschiebt
-// ihn trotzdem, genau wie den Spawn (der stattdessen seine Abstrahlrichtung dreht). Kauf-Leiste
-// anfassen = neues Gebäude ziehen und aufs Raster fallen lassen (kostet Lumen) bzw. Raster
-// erweitern (kostet Prisma, sofortige Aktion statt Drag).
+// ihn trotzdem. Der Endpunkt-Stein ist dagegen fix positioniert (kein Ziehen) — ein Antippen dreht
+// direkt seine Abstrahlrichtung. Kauf-Leiste anfassen = neues Gebäude ziehen und aufs Raster
+// fallen lassen (kostet Lumen) bzw. Raster erweitern (kostet Prisma, sofortige Aktion statt Drag).
 
+/** Bildschirm-Koordinaten (für HUD/Kauf-Leiste/Modals, die beim Scrollen fest stehen bleiben). */
 function pointerPos(e: PointerEvent): Point {
   const rect = canvas.getBoundingClientRect()
   return { x: e.clientX - rect.left, y: e.clientY - rect.top }
+}
+
+/** "Welt"-Koordinaten (für alles auf dem Raster: Gebäude/Türme/Endpunkt/Platzieren/Verschieben) —
+ * dieselbe Umrechnung wie render()s ctx.translate(0, -cameraOffsetY), nur umgekehrt. */
+function worldPointerPos(e: PointerEvent): Point {
+  const pos = pointerPos(e)
+  return { x: pos.x, y: pos.y + cameraOffsetY }
 }
 
 interface EconomyHit {
@@ -352,11 +474,12 @@ function hitTestTower(x: number, y: number): PlacedTower | null {
   return towers.find((t) => Math.hypot(towerCenter(t).x - x, towerCenter(t).y - y) <= TOWER_ICON_SIZE + 6) ?? null
 }
 
-/** Spawn-Hexagon anfassen — Klick dreht seine Abstrahlrichtung (wie ein Prisma), Halten+Ziehen
- * verschiebt ihn (siehe pendingPress-Logik unten). */
-function hitTestSpawn(x: number, y: number): boolean {
-  const spawnCenter = cellCenter(placementGrid, spawnNode)
-  return Math.hypot(spawnCenter.x - x, spawnCenter.y - y) <= 20
+/** Endpunkt-Stein anfassen — anders als früher beim Spawn kein Halten+Ziehen mehr (er ist fix
+ * positioniert, siehe endpointNode()), ein Klick dreht direkt seine Abstrahlrichtung (wie ein
+ * Prisma), ohne den pendingPress-Umweg über Klick-vs-Ziehen. */
+function hitTestEndpoint(x: number, y: number): boolean {
+  const center = cellCenter(placementGrid, endpointNode())
+  return Math.hypot(center.x - x, center.y - y) <= 20
 }
 
 /** Löscht ein Gebäude (Lichtquelle/Spiegel/Prisma) und erstattet seinen Lumen-Baukosten zurück
@@ -402,6 +525,18 @@ function attemptLevelUp(target: InfoTarget) {
   }
 }
 
+/** "SELL"-Knopf der Seitenleisten-Auswahlkarte (siehe drawRightSidebar()) — dispatcht auf die
+ * jeweils passende, schon vorhandene Abriss-Funktion. Spiegel/Prismen haben nie ein `infoTarget`
+ * (sie drehen sich stattdessen per Klick, siehe pointerup), brauchen hier also keinen Zweig. */
+function sellSelected(target: InfoTarget) {
+  if (target.kind === 'source') {
+    demolishEconomyBuilding({ kind: 'source', id: target.id })
+  } else {
+    const tower = towers.find((t) => t.id === target.id)
+    if (tower) demolishTower(tower)
+  }
+}
+
 /** Löscht einen Turm und erstattet seinen Lumen-Baukosten zurück (User-Wunsch). */
 function demolishTower(tower: PlacedTower) {
   towers = towers.filter((t) => t.id !== tower.id)
@@ -416,17 +551,18 @@ let placingCursor: Point | null = null
 let hoveredEconomyItem: PaletteItem | null = null
 let hoveredTowerItem: TowerPaletteItem | null = null
 let movingBuildingId: string | null = null
-let movingKind: 'source' | 'mirror' | 'prism' | 'tower' | 'spawn' | null = null
+let movingKind: 'source' | 'mirror' | 'prism' | 'tower' | null = null
 let movingCursor: Point | null = null
 
 function handleHudButton(id: HudButton['id']) {
   if (id === 'cheat') cheatAddHundredToAll(inventory)
   else if (id === 'demolish') demolishMode = !demolishMode
-  // 'settings' und 'save': absichtlich ohne Funktion (User-Wunsch — noch keine Logik dahinter).
+  // 'settings', 'save' und 'menu': absichtlich ohne Funktion (User-Wunsch — noch keine Logik dahinter).
 }
 
 canvas.addEventListener('pointerdown', (e) => {
   const pos = pointerPos(e)
+  const worldPos = worldPointerPos(e)
 
   // Tutorial-Popup blockiert alles andere, solange offen (nur beim allerersten Start).
   if (welcomeOpen) {
@@ -437,115 +573,94 @@ canvas.addEventListener('pointerdown', (e) => {
     return
   }
 
-  // Info-Panel blockiert alle anderen Interaktionen, solange es offen ist.
-  if (infoTarget) {
-    const layout = infoPanelLayout
-    if (!layout) {
-      infoTarget = null
-      return
-    }
-    const { closeButton, rows, x, y, width: w, height: h } = layout
-    const insideClose = pos.x >= closeButton.x && pos.x <= closeButton.x + closeButton.size && pos.y >= closeButton.y && pos.y <= closeButton.y + closeButton.size
-    if (insideClose) {
-      infoTarget = null
-      return
-    }
-    const clickedRow = rows.find((r) => r.action && pos.x >= x && pos.x <= x + w && pos.y >= r.y && pos.y <= r.y + r.height)
-    if (clickedRow?.action === 'level') {
-      attemptLevelUp(infoTarget)
-      return
-    }
-    const insidePanel = pos.x >= x && pos.x <= x + w && pos.y >= y && pos.y <= y + h
-    if (!insidePanel) infoTarget = null
-    return
-  }
-
-  // Türme-Infoseite / Farb-Guide blockieren ebenso alle anderen Interaktionen, solange offen —
-  // reine Anzeige, einziger Klick-Handler ist das Schließen.
-  if (towersInfoOpen) {
-    if (hitTestReferencePanelClose(width, height, pos.x, pos.y)) towersInfoOpen = false
-    return
-  }
-  if (colorGuideOpen) {
-    if (hitTestReferencePanelClose(width, height, pos.x, pos.y)) colorGuideOpen = false
-    return
-  }
-
   const button = hudButtons.find((b) => hitTestButton(b, pos.x, pos.y))
   if (button) {
     handleHudButton(button.id)
     return
   }
 
+  // "SELECTED TOWER/SOURCE"-Karte in der rechten Seitenleiste (User-Vorgabe, Referenzbild) — löst
+  // NICHT mehr alle anderen Interaktionen aus (anders als das frühere schwebende Info-Panel):
+  // Bauen/Platzieren/Scrollen bleiben möglich, solange etwas ausgewählt ist.
+  const sidebarButton = sidebarButtons.find((b) => hitTestButton(b, pos.x, pos.y))
+  if (sidebarButton) {
+    if (infoTarget) {
+      if (sidebarButton.id === 'upgrade') attemptLevelUp(infoTarget)
+      else if (sidebarButton.id === 'sell') sellSelected(infoTarget)
+      else if (sidebarButton.id === 'close') infoTarget = null
+    }
+    return
+  }
+
   const paletteItem = hitTestPalette(paletteItems, pos.x, pos.y)
   if (paletteItem) {
-    placingNewKind = paletteItem.kind
-    placingCursor = pos
+    // Grid-Erweiterung ist wie ihr früheres Pendant auf der Turm-Seite eine sofortige Aktion,
+    // kein Ziehen-aufs-Raster (siehe PaletteItem-Kommentar in render/buildingRender.ts).
+    if (paletteItem.kind === 'expand-grid') expandGrid()
+    else {
+      placingNewKind = paletteItem.kind
+      placingCursor = worldPos
+    }
     return
   }
 
   const towerPaletteItem = hitTestTowerPalette(towerPaletteItems, pos.x, pos.y)
   if (towerPaletteItem) {
-    if (towerPaletteItem.kind === 'expand-grid') expandGrid()
-    else if (towerPaletteItem.kind === 'tower-info') towersInfoOpen = true
-    else if (towerPaletteItem.kind === 'color-guide') colorGuideOpen = true
-    else {
-      placingTowerKind = towerPaletteItem.kind
-      placingTowerCursor = pos
-    }
+    placingTowerKind = towerPaletteItem.kind
+    placingTowerCursor = worldPos
     return
   }
 
-  const existingTower = hitTestTower(pos.x, pos.y)
+  const existingTower = hitTestTower(worldPos.x, worldPos.y)
   if (existingTower) {
     if (demolishMode) {
       demolishTower(existingTower)
       return
     }
-    pendingPress = { kind: 'tower', id: existingTower.id, downPos: pos }
+    pendingPress = { kind: 'tower', id: existingTower.id, downPos: worldPos }
     return
   }
 
-  if (hitTestSpawn(pos.x, pos.y)) {
-    // Kein Abriss für den Spawn — er ist Pflichtbestandteil des Rasters (immer genau 1).
-    pendingPress = { kind: 'spawn', id: 'spawn', downPos: pos }
+  if (hitTestEndpoint(worldPos.x, worldPos.y)) {
+    // Kein Halten+Ziehen und kein Abriss für den Endpunkt-Stein (fix positioniert, immer genau 1)
+    // — ein Klick dreht direkt seine Abstrahlrichtung, ohne den pendingPress-Umweg.
+    endpointDirection = nextValidEndpointDirection(endpointDirection)
+    recomputeEnemyPath()
     return
   }
 
-  const economyHit = hitTestEconomyBuilding(pos.x, pos.y)
+  const economyHit = hitTestEconomyBuilding(worldPos.x, worldPos.y)
   if (economyHit) {
     if (demolishMode) {
       demolishEconomyBuilding(economyHit)
       return
     }
-    pendingPress = { kind: economyHit.kind, id: economyHit.id, downPos: pos }
+    pendingPress = { kind: economyHit.kind, id: economyHit.id, downPos: worldPos }
   }
 })
 
 canvas.addEventListener('pointermove', (e) => {
   const pos = pointerPos(e)
+  const worldPos = worldPointerPos(e)
   if (welcomeOpen) return
-  if (infoTarget) return
-  if (towersInfoOpen) return
-  if (colorGuideOpen) return
 
   hoveredEconomyItem = hitTestPalette(paletteItems, pos.x, pos.y)
   hoveredTowerItem = hitTestTowerPalette(towerPaletteItems, pos.x, pos.y)
 
   if (pendingPress) {
-    const dist = Math.hypot(pos.x - pendingPress.downPos.x, pos.y - pendingPress.downPos.y)
+    const dist = Math.hypot(worldPos.x - pendingPress.downPos.x, worldPos.y - pendingPress.downPos.y)
     if (dist > PRESS_MOVE_THRESHOLD) {
       // Genug bewegt -> jetzt erst als Ziehen (Verschieben) werten, nicht als Klick.
       movingBuildingId = pendingPress.id
       movingKind = pendingPress.kind
-      movingCursor = pos
+      movingCursor = worldPos
       pendingPress = null
     }
   }
 
-  if (placingNewKind) placingCursor = pos
-  if (movingBuildingId) movingCursor = pos
-  if (placingTowerKind) placingTowerCursor = pos
+  if (placingNewKind) placingCursor = worldPos
+  if (movingBuildingId) movingCursor = worldPos
+  if (placingTowerKind) placingTowerCursor = worldPos
 })
 
 function finalizePlacement(pos: Point) {
@@ -596,7 +711,6 @@ function finalizeMove(pos: Point) {
 
   const occupantId = occupancy.get(cellKey(cell))
   if (occupantId && occupantId !== movingBuildingId) {
-    if (occupantId === 'spawn') return // Spawn hat sein eigenes Verschiebe-Ziel, kein Tauschpartner
     const other = findEconomyBuilding(occupantId) ?? towers.find((t) => t.id === occupantId)
     if (!other) return
     const originalCol = moving.col
@@ -623,7 +737,7 @@ function finalizeTowerMove(pos: Point) {
   if (!canPlaceAt(cell)) return
 
   const occupantId = occupancy.get(cellKey(cell))
-  if (occupantId && occupantId !== tower.id && occupantId !== 'spawn') {
+  if (occupantId && occupantId !== tower.id) {
     const other = findEconomyBuilding(occupantId) ?? towers.find((t) => t.id === occupantId)
     if (other) {
       const originalCol = tower.col
@@ -655,16 +769,8 @@ function finalizeTowerPlacement(pos: Point) {
   recomputeEnemyPath()
 }
 
-function finalizeSpawnMove(pos: Point) {
-  const cell = nearestCell(placementGrid, pos.x, pos.y)
-  if (!canMoveSpawnTo(cell)) return
-  spawnNode = cell
-  rebuildOccupancy()
-  recomputeEnemyPath()
-}
-
 window.addEventListener('pointerup', (e) => {
-  const pos = pointerPos(e)
+  const pos = worldPointerPos(e)
 
   if (placingNewKind) {
     finalizePlacement(pos)
@@ -674,7 +780,6 @@ window.addEventListener('pointerup', (e) => {
 
   if (movingBuildingId) {
     if (movingKind === 'tower') finalizeTowerMove(pos)
-    else if (movingKind === 'spawn') finalizeSpawnMove(pos)
     else finalizeMove(pos)
     movingBuildingId = null
     movingKind = null
@@ -690,9 +795,8 @@ window.addEventListener('pointerup', (e) => {
   if (pendingPress) {
     // Nie über die Bewegungsschwelle hinaus gezogen -> war ein Klick, kein Ziehen. Bei einem
     // Spiegel ODER einem Prisma dreht ein Klick es direkt (User-Vorgabe: "Prismen müssen auch
-    // gedreht werden können, wie Spiegel") statt ein Info-Panel zu öffnen. Der Spawn dreht ebenso
-    // seine Abstrahlrichtung (dasselbe Prinzip). Ein Spiegel dreht sowohl Licht- als auch
-    // Gegner-Pfad-Richtung (dieselben Objekte, siehe recomputeEnemyPath()).
+    // gedreht werden können, wie Spiegel") statt ein Info-Panel zu öffnen. Ein Spiegel dreht sowohl
+    // Licht- als auch Gegner-Pfad-Richtung (dieselben Objekte, siehe recomputeEnemyPath()).
     if (pendingPress.kind === 'mirror') {
       const mirror = mirrors.find((m) => m.id === pendingPress!.id)
       if (mirror) {
@@ -702,9 +806,6 @@ window.addEventListener('pointerup', (e) => {
     } else if (pendingPress.kind === 'prism') {
       const prism = prisms.find((p) => p.id === pendingPress!.id)
       if (prism) rotatePrism(prism)
-    } else if (pendingPress.kind === 'spawn') {
-      spawnDirection = ((spawnDirection + 1) % 6) as HexDirection
-      recomputeEnemyPath()
     } else {
       infoTarget = { kind: pendingPress.kind, id: pendingPress.id }
     }
@@ -724,24 +825,22 @@ function drawTowerPalette() {
   }
 }
 
-const TOWER_PALETTE_EXTRA_KINDS = new Set(['expand-grid', 'tower-info', 'color-guide'])
-
 /** Hover-Tooltip über einem Kauf-Leisten-Icon — Name + kurzer Zweck, siehe
  * paletteItemDescription()/towerPaletteItemDescription(). Nutzt denselben Chip-Look wie die
  * übrigen Panels (drawLabel(), aus shapes.ts). */
 function drawPaletteTooltips() {
-  // Sobald ein Modal offen ist, aktualisiert pointermove hoveredEconomyItem/hoveredTowerItem
-  // nicht mehr (siehe early returns dort) — ohne diese Sperre würde sonst ein stehen gebliebenes
-  // Tooltip vom Icon-Klick, der das Modal gerade erst geöffnet hat, sichtbar bleiben.
-  if (welcomeOpen || infoTarget || towersInfoOpen || colorGuideOpen) return
+  // Sobald das Tutorial-Popup offen ist, aktualisiert pointermove hoveredEconomyItem/
+  // hoveredTowerItem nicht mehr (siehe early return dort) — ohne diese Sperre würde sonst ein
+  // stehen gebliebenes Tooltip sichtbar bleiben. Eine Auswahl (infoTarget) blockiert das
+  // Tooltip-Hovern absichtlich NICHT mehr (User-Vorgabe: nicht-blockierende Auswahl).
+  if (welcomeOpen) return
   if (hoveredEconomyItem) {
     const item = hoveredEconomyItem
-    drawLabel(ctx!, paletteItemDescription(item.kind), item.x, item.y - item.radius - 14, '11px monospace', COLORS.textBright, 15)
+    drawLabel(ctx!, paletteItemDescription(item.kind), item.x, item.y - item.radius - 14, '12px monospace', COLORS.textBright, 15)
   }
   if (hoveredTowerItem) {
     const item = hoveredTowerItem
-    const text = TOWER_PALETTE_EXTRA_KINDS.has(item.kind) ? towerPaletteItemDescription(item.kind) : `${item.name} — ${towerPaletteItemDescription(item.kind)}`
-    drawLabel(ctx!, text, item.x, item.y - item.radius - 14, '11px monospace', COLORS.textBright, 15)
+    drawLabel(ctx!, `${item.name} — ${towerPaletteItemDescription(item.kind)}`, item.x, item.y - item.radius - 14, '12px monospace', COLORS.textBright, 15)
   }
 }
 
@@ -767,37 +866,23 @@ function drawTowerPlacementPreview() {
   ctx!.restore()
 }
 
+/** User-Vorgabe: deutlich stärkerer Kontrast zwischen aktiv/inaktiv als zuvor (0.4) — ein
+ * unterversorgter Turm soll klar erkennbar "abgeschaltet" wirken. Gilt NUR für "verkabelt, aber zu
+ * schwach versorgt" (starved) — ein UNVERKABELTER Turm feuert bewusst weiter mit voller Deckkraft
+ * (siehe hasAmmoAvailable()-Kommentar: das ist die absichtliche "Klarschuss ohne Effekt"-Baseline,
+ * kein Fehlerzustand). */
+const INACTIVE_ALPHA = 0.18
+
 function drawTowers() {
   for (const tower of towers) {
     const starved = tower.resourceId !== null && !hasAmmoAvailable(tower)
     if (starved) {
       ctx!.save()
-      ctx!.globalAlpha = 0.4
+      ctx!.globalAlpha = INACTIVE_ALPHA
     }
     drawTowerEntity(ctx!, tower, towerCenter(tower))
     if (starved) ctx!.restore()
   }
-}
-
-/** Wellenstand rechts oben (siehe towerdefense/waves.ts) — Wellennummer + Boss-Hinweis (jede 10.
- * Welle) plus Spawn-Fortschritt bzw. Pause-Countdown, sowie darunter die HP der Gegner dieser
- * Welle (User-Vorgabe) — inkl. Boss-HP, falls vorhanden. */
-function drawWaveStatus() {
-  const boss = isBossWave(waveState.currentWave)
-  const status =
-    waveState.phase === 'spawning' ? `${waveState.enemiesSpawnedInWave}/${waveState.totalInWave} spawned` : `next wave in ${Math.ceil(waveState.pauseTimer)}s`
-  const { regularHp, bossHp } = waveEnemyHp(waveState.currentWave)
-  const hpLine = bossHp !== null ? `HP ${Math.round(regularHp)}  ·  Boss HP ${Math.round(bossHp)}` : `HP ${Math.round(regularHp)}`
-
-  ctx!.save()
-  ctx!.textAlign = 'right'
-  ctx!.font = 'bold 12px monospace'
-  ctx!.fillStyle = boss ? '#ffcc33' : COLORS.textBright
-  ctx!.fillText(boss ? `WAVE ${waveState.currentWave} — BOSS  ·  ${status}` : `WAVE ${waveState.currentWave}  ·  ${status}`, width - 20, HUD_HEIGHT + 20)
-  ctx!.font = '11px monospace'
-  ctx!.fillStyle = COLORS.textMid
-  ctx!.fillText(hpLine, width - 20, HUD_HEIGHT + 36)
-  ctx!.restore()
 }
 
 interface LoadoutSummaryEntry {
@@ -830,23 +915,137 @@ function currentLoadoutSummary(): LoadoutSummaryEntry[] {
   })
 }
 
-const LOADOUT_SUMMARY_WIDTH = 230
+// User-Vorgabe: Farb-Guide + Turmregeln (immer sichtbar, kein Popup mehr) links vom Raster, Wave-/
+// Boss-/Schadens-Infos (vormals oben rechts bzw. unter dem Raster) rechts vom Raster — beide
+// Seitenleisten bildschirmfest (NICHT Teil von render()s Welt-ctx.translate), damit sie beim
+// Scrollen des (ggf. sehr hohen) Rasters sichtbar bleiben. Horizontal an den aktuellen Rasterkanten
+// verankert (originX bzw. originX+gridPixelWidth), wächst/schrumpft also mit dem Raster mit.
+const SIDE_PANEL_WIDTH = 260
+const SIDE_PANEL_MARGIN = 24
+const SIDE_PANEL_TOP = HUD_HEIGHT + 120
 
-/** Listet unter dem Raster je Turm-Konfiguration die Anzahl + den bisher insgesamt damit
- * angerichteten Treffer-Schaden (User-Vorgabe). */
-function drawTowerLoadoutSummary() {
-  const entries = currentLoadoutSummary()
-  if (entries.length === 0) return
+const PRIMARY_COLORS = RESOURCES.filter((r) => r.tier === 1)
+const COLOR_COMBINATIONS = RESOURCES.filter((r) => r.tier !== 1 && r.tier !== 'special')
 
-  const x = placementGrid.originX
-  let y = placementGrid.originY + gridPixelHeight(placementGrid) + 34
+/** Linke Seitenleiste: Farb-Guide als Karten-Liste (User-Vorgabe, Referenzbild), zweigeteilt in
+ * "Primary Colors" (Tier 1, gekauft statt gemischt) und "Color Combinations" (Tier 2-5) — keine
+ * Turmregeln mehr ("brauche ich nicht"), der Farb-Guide hat dadurch den vollen Platz für sich. */
+function drawLeftSidebar() {
+  const x = Math.max(16, placementGrid.originX - SIDE_PANEL_MARGIN - SIDE_PANEL_WIDTH)
+  const bottom = height - 20
+  drawColorGuideSidebarTitle(ctx!, x, SIDE_PANEL_TOP)
+
+  let y = SIDE_PANEL_TOP + 34
+  drawColorSectionHeader(ctx!, x, y, 'Primary Colors')
+  y += 12
+  y = drawColorGuideList(ctx!, x, y, SIDE_PANEL_WIDTH, Math.max(0, bottom - y), PRIMARY_COLORS)
+
+  if (y < bottom) {
+    y += 8
+    drawColorSectionHeader(ctx!, x, y, 'Color Combinations')
+    y += 12
+    drawColorGuideList(ctx!, x, y, SIDE_PANEL_WIDTH, Math.max(0, bottom - y), COLOR_COMBINATIONS)
+  }
+}
+
+const CARD_PADDING = 14
+const CARD_GAP = 14
+
+/** Wave-Karte: Titel (+ Boss-Hinweis), Spawn-Fortschrittsbalken (füllt sich auch während der
+ * Pause weiter, siehe Kommentar unten), "N remaining" mit Totenkopf-Symbol (User-Vorgabe,
+ * Referenzbild) — `totalInWave - enemiesResolvedInWave` (getötet + durchgekommen seit Wellen-
+ * beginn, siehe combatTick()), NICHT einfach `totalInWave - enemiesSpawnedInWave`, da bereits
+ * gespawnte, aber noch lebende Gegner ja ebenfalls noch "übrig" sind — und, falls gerade ein Boss
+ * lebt, dessen aktuelle Stacks (siehe towerdefense/enemies.ts activeStackCounts(), je Stack eine
+ * eigene Zeile statt nebeneinander, die Spalte ist hier schmal). Gibt die Y-Position nach der
+ * Karte zurück (Aufrufer reiht die nächste Karte direkt danach). */
+function drawWaveCard(x: number, y: number): number {
+  const bossEnemy = enemies.find((e) => e.isBoss)
+  const stacks = bossEnemy ? activeStackCounts(bossEnemy, elapsedSeconds) : []
+  const height = CARD_PADDING * 2 + 16 + 8 + 10 + 18 + stacks.length * 14
+  drawCard(ctx!, x, y, SIDE_PANEL_WIDTH, height)
+  let cursorY = y + CARD_PADDING + 12
+
+  const boss = isBossWave(waveState.currentWave)
+  ctx!.save()
+  ctx!.textAlign = 'left'
+  ctx!.textBaseline = 'alphabetic'
+  ctx!.font = 'bold 14px monospace'
+  ctx!.fillStyle = boss ? '#ffcc33' : COLORS.textBright
+  ctx!.fillText(boss ? `WAVE ${waveState.currentWave} — BOSS` : `WAVE ${waveState.currentWave}`, x + CARD_PADDING, cursorY)
+  cursorY += 20
+
+  // Während des Spawnens: Anteil bereits gespawnter Gegner. Während der Pause: Anteil der
+  // verstrichenen Pausenzeit (füllt sich also weiter Richtung "voll", statt einzufrieren) —
+  // dieselbe Pausendauer wie towerdefense/waves.ts tickWaveSpawning() (Boss-Welle = länger).
+  const pauseDuration = isBossWave(waveState.currentWave) ? BOSS_WAVE_PAUSE_SECONDS : WAVE_PAUSE_SECONDS
+  const fraction =
+    waveState.phase === 'spawning' ? waveState.enemiesSpawnedInWave / waveState.totalInWave : 1 - waveState.pauseTimer / pauseDuration
+  drawProgressBar(ctx!, x + CARD_PADDING, cursorY, SIDE_PANEL_WIDTH - CARD_PADDING * 2, 8, fraction, COLORS.accent)
+  cursorY += 24
+
+  const remaining = Math.max(0, waveState.totalInWave - enemiesResolvedInWave)
+  drawSkullIcon(ctx!, x + CARD_PADDING + 6, cursorY - 4, 7, COLORS.textMid)
+  ctx!.fillStyle = COLORS.textMid
+  ctx!.font = '12px monospace'
+  ctx!.fillText(`${remaining} remaining`, x + CARD_PADDING + 18, cursorY)
+  cursorY += 18
+
+  for (const s of stacks) {
+    const resource = getResource(s.resourceId)
+    ctx!.fillStyle = readableTextColor(resource.color)
+    ctx!.fillText(`${resource.name} x${s.count}`, x + CARD_PADDING, cursorY)
+    cursorY += 14
+  }
+  ctx!.restore()
+
+  return y + height
+}
+
+/** Basis-HP-Karte: Herz-Symbol + Fortschrittsbalken (grün/gelb/rot je Füllstand, siehe
+ * render/ui.ts healthFractionColor()) + "aktuell/max"-Text (User-Vorgabe, Referenzbild). */
+function drawBaseHpCard(x: number, y: number): number {
+  const height = CARD_PADDING * 2 + 16 + 8 + 18
+  drawCard(ctx!, x, y, SIDE_PANEL_WIDTH, height)
+  let cursorY = y + CARD_PADDING + 12
+
+  drawHeartIcon(ctx!, x + CARD_PADDING + 7, cursorY - 5, 7, '#ff3355')
+  ctx!.save()
+  ctx!.textAlign = 'left'
+  ctx!.textBaseline = 'alphabetic'
+  ctx!.font = 'bold 13px monospace'
+  ctx!.fillStyle = COLORS.textBright
+  ctx!.fillText('BASE HP', x + CARD_PADDING + 20, cursorY)
+  cursorY += 22
+
+  const fraction = baseHp / BASE_MAX_HP
+  drawProgressBar(ctx!, x + CARD_PADDING, cursorY, SIDE_PANEL_WIDTH - CARD_PADDING * 2, 8, fraction, healthFractionColor(fraction))
+  cursorY += 22
+
+  ctx!.textAlign = 'right'
+  ctx!.font = '12px monospace'
+  ctx!.fillStyle = COLORS.textMid
+  ctx!.fillText(`${Math.max(0, Math.round(baseHp))}/${BASE_MAX_HP}`, x + SIDE_PANEL_WIDTH - CARD_PADDING, cursorY)
+  ctx!.restore()
+
+  return y + height
+}
+
+/** Schadens-Karte — je Turm-Konfiguration Anzahl + Schaden NUR DIESE WELLE (User-Vorgabe,
+ * Referenzbild "TOWER DAMAGE (THIS WAVE)"; siehe combatTick(), das `damageByLoadout` bei jedem
+ * Wellenwechsel leert). */
+function drawTowerDamageCard(x: number, y: number, entries: LoadoutSummaryEntry[]): number {
+  const height = CARD_PADDING * 2 + 18 + entries.length * 20
+  drawCard(ctx!, x, y, SIDE_PANEL_WIDTH, height)
+  let cursorY = y + CARD_PADDING + 12
 
   ctx!.save()
   ctx!.textAlign = 'left'
+  ctx!.textBaseline = 'alphabetic'
   ctx!.fillStyle = COLORS.textDim
-  ctx!.font = '11px monospace'
-  ctx!.fillText('T O W E R   D A M A G E', x, y)
-  y += 22
+  ctx!.font = 'bold 11px monospace'
+  ctx!.fillText('TOWER DAMAGE (THIS WAVE)', x + CARD_PADDING, cursorY)
+  cursorY += 22
 
   for (const entry of entries) {
     const resource = getResource(entry.resourceId)
@@ -854,66 +1053,159 @@ function drawTowerLoadoutSummary() {
 
     ctx!.fillStyle = resource.color
     ctx!.beginPath()
-    ctx!.arc(x + 5, y - 4, 5, 0, Math.PI * 2)
+    ctx!.arc(x + CARD_PADDING + 5, cursorY - 4, 5, 0, Math.PI * 2)
     ctx!.fill()
 
     ctx!.textAlign = 'left'
     ctx!.fillStyle = COLORS.textBright
-    ctx!.font = '12px monospace'
-    ctx!.fillText(`${entry.count}x ${resource.name} ${def.name}`, x + 16, y)
+    ctx!.font = '13px monospace'
+    ctx!.fillText(`${entry.count}x ${resource.name} ${def.name}`, x + CARD_PADDING + 16, cursorY)
 
     ctx!.textAlign = 'right'
     ctx!.fillStyle = COLORS.textMid
-    ctx!.fillText(`${Math.round(entry.damage)} dmg`, x + LOADOUT_SUMMARY_WIDTH, y)
+    ctx!.fillText(`${Math.round(entry.damage)} dmg`, x + SIDE_PANEL_WIDTH - CARD_PADDING, cursorY)
 
-    y += 19
+    cursorY += 20
   }
   ctx!.restore()
+  return y + height
 }
 
-/** Layout + Zeichnen des Info-Panels für das aktuell angeklickte Gebäude/den Turm. Legt
- * `infoPanelLayout` fest, damit pointerdown dieselben Koordinaten fürs Hit-Testing nutzt. */
-function drawInfoPanel() {
-  if (!infoTarget) {
-    infoPanelLayout = null
+const SIDEBAR_BUTTON_HEIGHT = 30
+
+/** "SELECTED"-Karte: Name + Kennzahlen des ausgewählten Gebäudes/Turms (siehe selectedRows()),
+ * plus UPGRADE/SELL-Knöpfe. Baut `sidebarButtons` neu auf (pointerdown hittestet dagegen) — leert
+ * es zuerst, damit nach einem Deselect keine toten Knöpfe hängen bleiben. */
+function drawSelectedCard(x: number, y: number) {
+  sidebarButtons = []
+  if (!infoTarget) return
+  const selected = selectedRows(infoTarget)
+  if (!selected) {
+    infoTarget = null
     return
   }
 
-  let anchor: Point
-  let rowsInput: { label: string; value: string; action?: 'level' }[]
+  const rowHeight = 18
+  const height = CARD_PADDING * 2 + 20 + selected.rows.length * rowHeight + 10 + SIDEBAR_BUTTON_HEIGHT
+  drawCard(ctx!, x, y, SIDE_PANEL_WIDTH, height, true)
+  let cursorY = y + CARD_PADDING + 12
 
-  if (infoTarget.kind === 'source') {
-    const source = lightSources.find((s) => s.id === infoTarget!.id)
-    if (!source) {
-      infoTarget = null
-      return
-    }
-    anchor = buildingCenter(source)
+  ctx!.save()
+  ctx!.textAlign = 'left'
+  ctx!.textBaseline = 'alphabetic'
+  ctx!.fillStyle = COLORS.textDim
+  ctx!.font = 'bold 11px monospace'
+  ctx!.fillText('SELECTED', x + CARD_PADDING, cursorY)
+  ctx!.fillStyle = COLORS.textBright
+  ctx!.font = 'bold 14px monospace'
+  ctx!.fillText(selected.title, x + CARD_PADDING, cursorY + 18)
+  cursorY += 34
+
+  ctx!.font = '12px monospace'
+  ctx!.textBaseline = 'middle'
+  for (const row of selected.rows) {
+    ctx!.fillStyle = COLORS.textDim
+    ctx!.textAlign = 'left'
+    ctx!.fillText(row.label, x + CARD_PADDING, cursorY)
+    ctx!.fillStyle = COLORS.textBright
+    ctx!.textAlign = 'right'
+    ctx!.fillText(row.value, x + SIDE_PANEL_WIDTH - CARD_PADDING, cursorY)
+    cursorY += rowHeight
+  }
+  ctx!.restore()
+
+  cursorY += 10
+  const buttonGap = 8
+  const buttonWidth = (SIDE_PANEL_WIDTH - CARD_PADDING * 2 - buttonGap) / 2
+  const canUpgrade = selected.rows.some((r) => r.action === 'level')
+
+  const upgradeButton = { id: 'upgrade' as const, x: x + CARD_PADDING, y: cursorY, width: buttonWidth, height: SIDEBAR_BUTTON_HEIGHT }
+  const sellButton = { id: 'sell' as const, x: upgradeButton.x + buttonWidth + buttonGap, y: cursorY, width: buttonWidth, height: SIDEBAR_BUTTON_HEIGHT }
+  sidebarButtons.push(upgradeButton, sellButton)
+
+  ctx!.save()
+  ctx!.textAlign = 'center'
+  ctx!.textBaseline = 'middle'
+  ctx!.font = '12px monospace'
+
+  drawCard(ctx!, upgradeButton.x, upgradeButton.y, upgradeButton.width, upgradeButton.height, canUpgrade)
+  ctx!.fillStyle = canUpgrade ? COLORS.accent : COLORS.textDim
+  ctx!.fillText('UPGRADE', upgradeButton.x + upgradeButton.width / 2, upgradeButton.y + upgradeButton.height / 2 + 1)
+
+  drawCard(ctx!, sellButton.x, sellButton.y, sellButton.width, sellButton.height)
+  ctx!.fillStyle = '#ff3355'
+  ctx!.fillText('SELL', sellButton.x + sellButton.width / 2, sellButton.y + sellButton.height / 2 + 1)
+  ctx!.restore()
+}
+
+/** Rechte Seitenleiste: Wave-Fortschritt, Basis-HP, Turm-Schaden (diese Welle), und — falls
+ * gerade ein Gebäude/Turm ausgewählt ist — die "SELECTED"-Karte mit Upgrade/Sell (User-Vorgabe,
+ * Referenzbild). */
+/** Kurzer, nicht-blockierender Hinweis nach einem Basis-HP-Reset (siehe softResetRun()) — fährt
+ * sich über BASE_DESTROYED_MESSAGE_SECONDS automatisch aus, kein Klick zum Schließen nötig (User-
+ * Vorgabe: "nur pausieren"-Modal war NICHT die gewählte Option — weicher Reset statt Blockade). */
+function drawBaseDestroyedMessage() {
+  if (elapsedSeconds >= baseDestroyedMessageUntil) return
+  const remaining = baseDestroyedMessageUntil - elapsedSeconds
+  const alpha = Math.min(1, remaining)
+  ctx!.save()
+  ctx!.globalAlpha = alpha
+  ctx!.textAlign = 'center'
+  ctx!.font = 'bold 16px monospace'
+  ctx!.fillStyle = '#ff3355'
+  ctx!.fillText('BASE DESTROYED — RESETTING TO WAVE 1', width / 2, SIDE_PANEL_TOP - 24)
+  ctx!.restore()
+}
+
+function drawRightSidebar() {
+  const x = placementGrid.originX + gridPixelWidth(placementGrid) + SIDE_PANEL_MARGIN
+  let y = SIDE_PANEL_TOP
+
+  y = drawWaveCard(x, y) + CARD_GAP
+  y = drawBaseHpCard(x, y) + CARD_GAP
+
+  const entries = currentLoadoutSummary()
+  if (entries.length > 0) y = drawTowerDamageCard(x, y, entries) + CARD_GAP
+
+  drawSelectedCard(x, y)
+}
+
+interface SelectedRow {
+  label: string
+  value: string
+  action?: 'level'
+}
+
+/** Name + Kennzahlen für die "SELECTED"-Karte der rechten Seitenleiste (siehe drawRightSidebar())
+ * — dieselben Felder wie das frühere schwebende Info-Panel, nur ohne Layout/Zeichnen (das
+ * übernimmt jetzt die Seitenleiste). Gibt `null` zurück, wenn das Ziel inzwischen weg ist (z. B.
+ * gerade abgerissen) — Aufrufer räumt dann `infoTarget` auf. */
+function selectedRows(target: InfoTarget): { title: string; rows: SelectedRow[] } | null {
+  if (target.kind === 'source') {
+    const source = lightSources.find((s) => s.id === target.id)
+    if (!source) return null
     const active = lightSimulation.activeSourceIds.has(source.id)
     const maxed = source.level >= GENERATOR_MAX_LEVEL
-    rowsInput = [
-      { label: 'Name', value: 'Light Source' },
-      { label: 'Color', value: getResource(source.resourceId).name },
-      { label: 'Level', value: maxed ? `${source.level}/${GENERATOR_MAX_LEVEL} (max)` : `${source.level}/${GENERATOR_MAX_LEVEL} (Lv.${source.level + 1}: ${generatorUpgradeCost(source.level + 1)} lumen)`, action: maxed ? undefined : 'level' },
-      { label: 'Range', value: `${source.range} cells` },
-      { label: 'Status', value: active ? 'Delivering' : 'Idle (no tower in range)' },
-    ]
-  } else {
-    const tower = towers.find((t) => t.id === infoTarget!.id)
-    if (!tower) {
-      infoTarget = null
-      return
+    return {
+      title: 'Light Source',
+      rows: [
+        { label: 'Color', value: getResource(source.resourceId).name },
+        { label: 'Level', value: maxed ? `${source.level}/${GENERATOR_MAX_LEVEL} (max)` : `${source.level}/${GENERATOR_MAX_LEVEL} (Lv.${source.level + 1}: ${generatorUpgradeCost(source.level + 1)} lumen)`, action: maxed ? undefined : 'level' },
+        { label: 'Range', value: `${source.range} cells` },
+        { label: 'Status', value: active ? 'Delivering' : 'Idle (no tower in range)' },
+      ],
     }
-    anchor = towerCenter(tower)
-    const def = getTowerDefinition(tower.kind)
-    const stats = getEffectiveTowerStats(tower)
-    const ammo = lightSimulation.towerAmmo.get(tower.id)
-    const ammoLabel = tower.resourceId
-      ? `${getResource(tower.resourceId).name} (strength ${ammo?.strength ?? 0})`
-      : '— (not connected)'
-    const maxed = tower.level >= TOWER_MAX_LEVEL
-    rowsInput = [
-      { label: 'Name', value: def.name },
+  }
+  const tower = towers.find((t) => t.id === target.id)
+  if (!tower) return null
+  const def = getTowerDefinition(tower.kind)
+  const stats = getEffectiveTowerStats(tower)
+  const ammo = lightSimulation.towerAmmo.get(tower.id)
+  const ammoLabel = tower.resourceId ? `${getResource(tower.resourceId).name} (strength ${ammo?.strength ?? 0})` : '— (not connected)'
+  const maxed = tower.level >= TOWER_MAX_LEVEL
+  return {
+    title: def.name,
+    rows: [
       { label: 'Ammo', value: tower.resourceId && !hasAmmoAvailable(tower) ? `${ammoLabel} (Shortage!)` : ammoLabel },
       { label: 'Level', value: maxed ? `${tower.level}/${TOWER_MAX_LEVEL} (max)` : `${tower.level}/${TOWER_MAX_LEVEL} (next: ${towerUpgradeCost(def, tower.level + 1)} lumen)`, action: maxed ? undefined : 'level' },
       { label: 'Damage', value: stats.damage.toFixed(1) },
@@ -921,78 +1213,12 @@ function drawInfoPanel() {
       { label: 'Attack Speed', value: `${(1 / stats.fireInterval).toFixed(2)}/s` },
       { label: 'Projectile Speed', value: stats.projectileSpeed ? `${stats.projectileSpeed.toFixed(0)}px/s` : '—' },
       { label: 'Consumption', value: `${stats.consumption.toFixed(1)}/s` },
-    ]
+    ],
   }
-
-  const panelWidth = 230
-  const padding = 12
-  const rowHeight = 18
-  const panelHeight = padding * 2 + rowsInput.length * rowHeight
-  let panelX = anchor.x + 30
-  let panelY = anchor.y - panelHeight / 2
-  if (panelX + panelWidth > width - 10) panelX = anchor.x - panelWidth - 30
-  if (panelX < 10) panelX = 10
-  if (panelY < HUD_HEIGHT + 10) panelY = HUD_HEIGHT + 10
-  if (panelY + panelHeight > height - 10) panelY = height - 10 - panelHeight
-
-  const closeSize = 16
-  const closeButton = { x: panelX + panelWidth - closeSize - 8, y: panelY + 8, size: closeSize }
-  const rows: InfoPanelRow[] = rowsInput.map((r, i) => ({
-    ...r,
-    y: panelY + padding + i * rowHeight,
-    height: rowHeight,
-  }))
-  infoPanelLayout = { x: panelX, y: panelY, width: panelWidth, height: panelHeight, closeButton, rows }
-
-  ctx!.save()
-  ctx!.fillStyle = '#0b0d12'
-  ctx!.strokeStyle = COLORS.gridLineStrong
-  ctx!.lineWidth = 1.5
-  if (typeof ctx!.roundRect === 'function') {
-    ctx!.beginPath()
-    ctx!.roundRect(panelX, panelY, panelWidth, panelHeight, 6)
-    ctx!.fill()
-    ctx!.stroke()
-  } else {
-    ctx!.fillRect(panelX, panelY, panelWidth, panelHeight)
-    ctx!.strokeRect(panelX, panelY, panelWidth, panelHeight)
-  }
-  ctx!.restore()
-
-  ctx!.save()
-  ctx!.font = '11px monospace'
-  ctx!.textBaseline = 'middle'
-  for (const row of rows) {
-    const midY = row.y + row.height / 2
-    ctx!.fillStyle = COLORS.textDim
-    ctx!.textAlign = 'left'
-    ctx!.fillText(row.label, panelX + padding, midY)
-    ctx!.fillStyle = COLORS.textBright
-    ctx!.textAlign = 'right'
-    ctx!.fillText(row.value, panelX + panelWidth - padding - 22, midY)
-    if (row.action) {
-      ctx!.strokeStyle = COLORS.gridLine
-      ctx!.beginPath()
-      ctx!.moveTo(panelX + padding, row.y + row.height)
-      ctx!.lineTo(panelX + panelWidth - padding, row.y + row.height)
-      ctx!.stroke()
-    }
-  }
-  ctx!.restore()
-
-  ctx!.save()
-  ctx!.strokeStyle = COLORS.textBright
-  ctx!.lineWidth = 1.5
-  ctx!.strokeRect(closeButton.x, closeButton.y, closeButton.size, closeButton.size)
-  ctx!.beginPath()
-  ctx!.moveTo(closeButton.x + 4, closeButton.y + 4)
-  ctx!.lineTo(closeButton.x + closeButton.size - 4, closeButton.y + closeButton.size - 4)
-  ctx!.moveTo(closeButton.x + closeButton.size - 4, closeButton.y + 4)
-  ctx!.lineTo(closeButton.x + 4, closeButton.y + closeButton.size - 4)
-  ctx!.stroke()
-  ctx!.restore()
 }
 
+/** `kind` ist hier nie `'expand-grid'` — das wird in pointerdown() als Sofort-Aktion abgefangen,
+ * bevor `placingNewKind` überhaupt gesetzt wird (kein Ziehen-aufs-Raster dafür). */
 function placementCost(kind: PaletteKind): number {
   if (kind === 'mirror') return BUILDING_COSTS.mirror
   if (kind === 'prism-simple') return BUILDING_COSTS.prismSimple
@@ -1077,18 +1303,6 @@ function drawMovePreview() {
     return
   }
 
-  if (movingKind === 'spawn') {
-    const cell = nearestCell(placementGrid, movingCursor.x, movingCursor.y)
-    const valid = canMoveSpawnTo(cell)
-    const center = cellCenter(placementGrid, cell)
-    drawCellHighlight(ctx!, placementGrid, cell, valid ? '#39ff8f' : '#ff3355', 0.3)
-    ctx!.save()
-    ctx!.globalAlpha = 0.7
-    drawHexagon(ctx!, center.x, center.y, 14, COLORS.enemy, 0, 18)
-    ctx!.restore()
-    return
-  }
-
   const cell = cellAtPoint(placementGrid, movingCursor.x, movingCursor.y)
   let valid = false
   let kind: PaletteKind | null = null
@@ -1116,7 +1330,7 @@ function drawMovePreview() {
   drawPaletteGhost(kind, previewPos)
 }
 
-/** Das gemeinsame Raster: Rasterlinien + Gegner-Pfad (inkl. Spawn-Marker) + Lichtstrahlen +
+/** Das gemeinsame Raster: Rasterlinien + Gegner-Pfad (inkl. Endpunkt-Stein + Einlauf-Marker) + Lichtstrahlen +
  * Max-Level-Marker + alle Gebäude (Lichtquellen/Spiegel/Prismen) — Türme werden separat danach
  * gezeichnet (siehe drawTowers(), für die richtige Ziel-Priorität beim Klicken sowie den
  * "Shortage"-Alpha-Effekt). */
@@ -1125,7 +1339,10 @@ function drawWorld() {
 
   drawPath(ctx!, enemyPathPixels, pathHitBlockerId !== null)
 
-  for (const segment of lightSimulation.segments) drawBeamSegment(ctx!, placementGrid, segment)
+  // User-Vorgabe: Verbindungen ohne Prisma/Turm als Ziel (reachedEndpoint=false — lief in eine
+  // Wand, den Reichweiten-Rand, eine Kollision, oder wurde vom Gegner-Pfad geblockt) wirken deutlich
+  // gedimmt, analog zum INACTIVE_ALPHA eines unterversorgten Turms (drawTowers()).
+  for (const segment of lightSimulation.segments) drawBeamSegment(ctx!, placementGrid, segment, segment.reachedEndpoint ? 0.8 : INACTIVE_ALPHA)
   for (const segment of lightSimulation.segments) {
     if (segment.reachedEndpoint) drawBeamTraveler(ctx!, placementGrid, segment, elapsedSeconds)
   }
@@ -1137,7 +1354,7 @@ function drawWorld() {
     if (isSourceMaxed(source)) drawMaxLevelCellMarker(ctx!, placementGrid, { col: source.col, row: source.row })
   }
 
-  for (const source of lightSources) drawLightSourceEntity(ctx!, source, buildingCenter(source), elapsedSeconds)
+  for (const source of lightSources) drawLightSourceEntity(ctx!, source, buildingCenter(source), elapsedSeconds, lightSimulation.activeSourceIds.has(source.id))
   for (const mirror of mirrors) drawMirrorEntity(ctx!, mirror, buildingCenter(mirror), placementGrid.cellSize)
   for (const prism of prisms) {
     const status = lightSimulation.prismStatus.get(prism.id)
@@ -1171,7 +1388,13 @@ function economyTick(dt: number) {
 function combatTick(dt: number) {
   if (!worldReady) return
 
-  tickWaveSpawning(waveState, dt, enemies)
+  // tickWaveSpawning() gibt `true` GENAU im Frame des Wellenwechsels zurück (Pause -> Spawning,
+  // siehe towerdefense/waves.ts) — daran hängen die "pro Welle"-Zähler, statt separat auf eine
+  // geänderte Wellennummer zu diffen.
+  if (tickWaveSpawning(waveState, dt, enemies)) {
+    damageByLoadout = new Map()
+    enemiesResolvedInWave = 0
+  }
 
   for (const enemy of enemies) tickEnemy(enemy, dt, elapsedSeconds, enemyPathLength)
 
@@ -1181,39 +1404,46 @@ function combatTick(dt: number) {
 
   const { remaining, killed, arrived } = pruneEnemies(enemies)
   enemies = remaining
+  enemiesResolvedInWave += killed.length + arrived.length
   if (killed.length > 0) {
     const lumen = killed.reduce((sum, e) => sum + LUMEN_PER_KILL * (e.isBoss ? BOSS_LUMEN_MULTIPLIER : 1), 0)
     addToInventory(inventory, 'lumen', lumen)
   }
-  // Jeder durchgekommene Gegner markiert die aktuelle Welle als nicht geschafft (siehe
-  // towerdefense/waves.ts tickWaveSpawning()) — die nächste Welle springt dann 5 zurück statt
-  // vorwärtszugehen.
-  for (let i = 0; i < arrived.length; i++) registerLeak(waveState)
+  // User-Vorgabe: ein durchgekommener Gegner kostet jetzt Basis-HP statt die Welle scheitern zu
+  // lassen (siehe BASE_MAX_HP-Kommentar weiter oben) — ein Boss-Leak kostet deutlich mehr.
+  if (arrived.length > 0) {
+    const damage = arrived.reduce((sum, e) => sum + (e.isBoss ? DAMAGE_PER_BOSS_LEAK : DAMAGE_PER_LEAK), 0)
+    baseHp = Math.max(0, baseHp - damage)
+    if (baseHp <= 0) softResetRun()
+  }
 }
 
 function render(_dt: number) {
   ctx!.fillStyle = COLORS.background
   ctx!.fillRect(0, 0, width, height)
 
-  drawEconomyPalette()
-  drawTowerPalette()
-  drawPaletteTooltips()
-  drawWaveStatus()
+  // Alles auf dem Raster (Gebäude/Türme/Pfad/Gegner/Projektile) lebt in "Welt"-Koordinaten und
+  // wird um cameraOffsetY nach oben verschoben gezeichnet (siehe worldPointerPos() fürs Hit-Testing
+  // in Gegenrichtung) — Kauf-Leiste/HUD/Modals bleiben bewusst AUSSERHALB dieses Blocks, damit sie
+  // beim Scrollen bildschirmfest stehen bleiben.
+  ctx!.save()
+  ctx!.translate(0, -cameraOffsetY)
   drawWorld()
-  drawTowerLoadoutSummary()
   drawTowers()
   drawTowerCombatEffects(ctx!, towers, enemies, enemyPathPixels, towerCenter)
   drawTowerPlacementPreview()
   drawEnemies(ctx!, enemies, enemyPathPixels, elapsedSeconds)
   drawProjectiles(ctx!, projectiles)
   drawVisualEffects(ctx!, visualEffects, elapsedSeconds)
+  ctx!.restore()
 
+  drawEconomyPalette()
+  drawTowerPalette()
+  drawPaletteTooltips()
+  drawLeftSidebar()
+  drawRightSidebar()
+  drawBaseDestroyedMessage()
   drawHud(ctx!, width, inventory, playerName, playerLevel, hudButtons, demolishMode)
-
-  if (towersInfoOpen) drawTowerReferencePanel(ctx!, width, height)
-  if (colorGuideOpen) drawColorGuidePanel(ctx!, width, height)
-
-  drawInfoPanel()
 
   if (welcomeOpen) drawWelcomePanel(ctx!, width, height)
 }
