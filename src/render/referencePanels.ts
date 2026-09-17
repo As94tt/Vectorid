@@ -4,18 +4,23 @@
 // auf. Die Turmregeln-Liste, die früher direkt darüber stand, ist wieder entfernt (User-Vorgabe:
 // "brauche ich nicht") — ein platzierter Turm hat weiterhin seine eigenen Kennzahlen, jetzt in der
 // "SELECTED"-Karte der RECHTEN Seitenleiste (siehe main.ts drawSelectedCard()) statt in einem
-// schwebenden Info-Panel. Nur das einmalige Willkommens-/Tutorial-Popup (drawWelcomePanel()) ist
-// noch ein echtes blockierendes Modal mit Chrome (drawPanelChrome()) — erscheint einmalig beim
-// allerersten Start (siehe main.ts, per localStorage gemerkt).
+// schwebenden Info-Panel. Zwei Arten blockierender Modals mit gemeinsamer Chrome
+// (drawPanelChrome()) bleiben: das einmalige Willkommens-/Tutorial-Popup (drawWelcomePanel(),
+// erscheint einmalig beim allerersten Start, siehe main.ts) und die neuen Erstbau-Tipp-Felder
+// (drawBuildingTipPanel(), einmal pro Gebäude-/Turmart) — beide per localStorage gemerkt, beide
+// über das "Disable tips"-Häkchen im Quick-Start-Popup gemeinsam abschaltbar.
 
 import { COLORS, readableTextColor } from '../constants/colors'
 import { getResource, RESOURCES, type ResourceDefinition } from '../data/resources'
 import { COLOR_EFFECT_INFO } from '../towerdefense/ammoEffects'
+import type { TowerKind } from '../towerdefense/towers'
 import { drawCircle, drawCircleOutline, drawHexagonOutline, drawTriangleOutline } from './shapes'
 import { drawCard } from './ui'
 
 const PANEL_FILL = '#0b0d12'
 const CLOSE_BUTTON_SIZE = 26
+const DEFAULT_PANEL_MAX_WIDTH = 960
+const DEFAULT_PANEL_MAX_HEIGHT = 680
 
 interface PanelBounds {
   x: number
@@ -25,9 +30,13 @@ interface PanelBounds {
   closeButton: { x: number; y: number; size: number }
 }
 
-function panelBounds(width: number, height: number): PanelBounds {
-  const panelWidth = Math.min(960, width - 120)
-  const panelHeight = Math.min(680, height - 120)
+/** `maxWidth`/`maxHeight` lassen ein kleineres Modal zu (siehe drawBuildingTipPanel()) — ein
+ * einzelner kurzer Tipp braucht nicht die volle Quick-Start-Panelgröße. Muss beim Hit-Test
+ * (hitTestReferencePanelClose()/hitTestBuildingTipClose()) exakt dieselben Werte bekommen wie beim
+ * Zeichnen, sonst verschiebt sich der Schließen-Knopf gegenüber seiner sichtbaren Position. */
+function panelBounds(width: number, height: number, maxWidth = DEFAULT_PANEL_MAX_WIDTH, maxHeight = DEFAULT_PANEL_MAX_HEIGHT): PanelBounds {
+  const panelWidth = Math.min(maxWidth, width - 120)
+  const panelHeight = Math.min(maxHeight, height - 120)
   const x = (width - panelWidth) / 2
   const y = (height - panelHeight) / 2
   return { x, y, width: panelWidth, height: panelHeight, closeButton: { x: x + panelWidth - 40, y: y + 14, size: CLOSE_BUTTON_SIZE } }
@@ -38,8 +47,16 @@ export function hitTestReferencePanelClose(width: number, height: number, x: num
   return x >= b.x && x <= b.x + b.size && y >= b.y && y <= b.y + b.size
 }
 
-function drawPanelChrome(ctx: CanvasRenderingContext2D, width: number, height: number, title: string, subtitle?: string): PanelBounds {
-  const bounds = panelBounds(width, height)
+function drawPanelChrome(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  title: string,
+  subtitle?: string,
+  maxWidth = DEFAULT_PANEL_MAX_WIDTH,
+  maxHeight = DEFAULT_PANEL_MAX_HEIGHT,
+): PanelBounds {
+  const bounds = panelBounds(width, height, maxWidth, maxHeight)
 
   ctx.save()
   ctx.fillStyle = 'rgba(3, 4, 6, 0.92)'
@@ -93,7 +110,7 @@ function drawPanelChrome(ctx: CanvasRenderingContext2D, width: number, height: n
 
 /** Bricht `text` in bis zu `maxLines` Zeilen um (einfacher Greedy-Wortumbruch); überschüssiger
  * Text wird in der letzten Zeile mit "…" abgeschnitten statt den Bereich zu sprengen. */
-function wrapLines(ctx: CanvasRenderingContext2D, text: string, maxWidth: number, maxLines: number): string[] {
+export function wrapLines(ctx: CanvasRenderingContext2D, text: string, maxWidth: number, maxLines: number): string[] {
   const words = text.split(' ')
   const lines: string[] = []
   let current = ''
@@ -198,6 +215,11 @@ export function drawColorGuideList(
   width: number,
   height: number,
   resourceList: ResourceDefinition[] = RESOURCES.filter((r) => r.tier !== 'special'),
+  // Progress-System (User-Vorgabe): main.ts filtert `resourceList` bereits auf freigeschaltete
+  // Tiers herunter (siehe unlockedColorTiers) — kennt aber auch das nächste NOCH gesperrte Tier
+  // (falls es eins gibt) und reicht dessen Nummer hier durch, damit direkt im Anschluss ein
+  // Hinweis-Platzhalter dafür erscheint (siehe drawLockedTierPlaceholder()).
+  nextLockedTier: ResourceDefinition['tier'] | null = null,
 ): number {
   const tiers = new Map<ResourceDefinition['tier'], ResourceDefinition[]>()
   for (const r of resourceList) {
@@ -278,8 +300,35 @@ export function drawColorGuideList(
     cursorY += TIER_GROUP_GAP - DETAIL_CARD_GAP
   }
 
+  if (nextLockedTier !== null) cursorY = drawLockedTierPlaceholder(ctx, x, cursorY, width, y + height)
+
   ctx.restore()
   return cursorY
+}
+
+const LOCKED_TIER_MESSAGE = 'Create all previous colors to unlock the next tier.'
+
+/** Progress-System (User-Vorgabe): Hinweis-Karte anstelle der (noch gesperrten) Rezept-Karten des
+ * nächsten Tiers — bewusst OHNE Tier-Nummer/-Kopfzeile, der exakte Wortlaut ist User-Vorgabe.
+ * Erscheint nur, wenn noch Platz ist (dieselbe "kein Scrollen"-Sicherheitsbremse wie beim Rest der
+ * Liste), gibt sonst `maxY` unverändert zurück. */
+function drawLockedTierPlaceholder(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, maxY: number): number {
+  ctx.font = '11px monospace'
+  const lines = wrapLines(ctx, LOCKED_TIER_MESSAGE, width - DETAIL_CARD_PADDING * 2, 3)
+  const cardHeight = DETAIL_CARD_PADDING * 2 + lines.length * DETAIL_LINE_HEIGHT
+  if (y + cardHeight > maxY) return y
+
+  drawCard(ctx, x, y, width, cardHeight)
+  ctx.save()
+  ctx.textAlign = 'center'
+  ctx.fillStyle = COLORS.textDim
+  let lineY = y + DETAIL_CARD_PADDING + 8
+  for (const line of lines) {
+    ctx.fillText(line, x + width / 2, lineY)
+    lineY += DETAIL_LINE_HEIGHT
+  }
+  ctx.restore()
+  return y + cardHeight
 }
 
 /** Kopf der Farb-Guide-Seitenleiste (User-Vorgabe, Referenzbild: Titel + kurze Unterzeile) — die
@@ -306,11 +355,11 @@ const QUICK_START_STEPS: { title: string; body: string }[] = [
   { title: '3. Build Towers', body: 'Choose a tower type and place it anywhere on the shared grid.' },
   {
     title: '4. Arm Your Towers',
-    body: 'Route a beam directly into a tower — whatever color reaches it becomes its ammo automatically. No picking, no storage: the wire IS the ammo, and a stronger beam (a higher-level generator, or a shorter route) arms it more reliably.',
+    body: 'Route a beam directly into a tower — whatever color reaches it becomes its ammo automatically. No picking, no storage: the wire IS the ammo, and only whether the beam arrives matters, not its strength.',
   },
   {
     title: '5. Defend',
-    body: 'Enemies march toward the fixed stone above the grid — click it to rotate which way it casts its path. Every building blocks the path, and the path itself blocks light beams crossing it, so plan your layout carefully. Use mirrors to redirect both the enemy path and your light beams.',
+    body: 'Enemies march toward the fixed stone above the grid, always from the same fixed direction. Every building blocks the path, and the path itself blocks light beams crossing it, so plan your layout carefully. Use mirrors to redirect both the enemy path and your light beams.',
   },
   {
     title: '6. Protect Your Base',
@@ -318,9 +367,28 @@ const QUICK_START_STEPS: { title: string; body: string }[] = [
   },
 ]
 
+const TIPS_TOGGLE_SIZE = 16
+
+/** Position des "Disable tips"-Häkchens (User-Vorgabe: "beim Quick-Start-Tutorial-Text soll es die
+ * Option geben, Tipps zu deaktivieren") — unten links im Panel, auf derselben Höhe wie die
+ * zentrierte Tagline, die bei der üblichen Panelbreite genug Platz auf beiden Seiten lässt. Eigene
+ * Funktion (statt inline in drawWelcomePanel()), damit Zeichnen und Hit-Test garantiert dieselbe
+ * Position meinen. */
+function tipsToggleBounds(width: number, height: number) {
+  const bounds = panelBounds(width, height)
+  return { x: bounds.x + 28, y: bounds.y + bounds.height - 32, size: TIPS_TOGGLE_SIZE }
+}
+
+export function hitTestTipsToggle(width: number, height: number, x: number, y: number): boolean {
+  const b = tipsToggleBounds(width, height)
+  return x >= b.x && x <= b.x + b.size && y >= b.y && y <= b.y + b.size
+}
+
 /** Einmaliges Willkommens-/Tutorial-Popup (siehe main.ts — per localStorage gemerkt, erscheint
- * nur beim allerersten Start). Teilt sich Chrome/Close-Position mit drawTowerReferencePanel(). */
-export function drawWelcomePanel(ctx: CanvasRenderingContext2D, width: number, height: number) {
+ * nur beim allerersten Start). Teilt sich Chrome/Close-Position mit drawTowerReferencePanel().
+ * `tipsDisabled` steuert nur den Häkchen-Zustand hier — main.ts hält den eigentlichen State (auch
+ * die neuen Erstbau-Tipps unten hängen daran, siehe drawBuildingTipPanel()). */
+export function drawWelcomePanel(ctx: CanvasRenderingContext2D, width: number, height: number, tipsDisabled: boolean) {
   const bounds = drawPanelChrome(ctx, width, height, 'Q U I C K   S T A R T')
 
   const padding = 28
@@ -352,5 +420,119 @@ export function drawWelcomePanel(ctx: CanvasRenderingContext2D, width: number, h
   ctx.fillStyle = COLORS.textBright
   ctx.font = 'bold 17px monospace'
   ctx.fillText('Mix.  Build.  Defend.', bounds.x + bounds.width / 2, bounds.y + bounds.height - 24)
+  ctx.restore()
+
+  const toggle = tipsToggleBounds(width, height)
+  ctx.save()
+  ctx.strokeStyle = COLORS.textMid
+  ctx.lineWidth = 1.5
+  ctx.strokeRect(toggle.x, toggle.y, toggle.size, toggle.size)
+  if (tipsDisabled) {
+    ctx.strokeStyle = COLORS.accent
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.moveTo(toggle.x + 3, toggle.y + toggle.size / 2)
+    ctx.lineTo(toggle.x + toggle.size / 2, toggle.y + toggle.size - 3)
+    ctx.lineTo(toggle.x + toggle.size - 3, toggle.y + 3)
+    ctx.stroke()
+  }
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'alphabetic'
+  ctx.fillStyle = COLORS.textMid
+  ctx.font = '13px monospace'
+  ctx.fillText('Disable tips', toggle.x + toggle.size + 8, toggle.y + toggle.size - 3)
+  ctx.restore()
+}
+
+/** Kurzer Erklärtext je Gebäude-/Turmart fürs Erstbau-Tipp-Feld (siehe drawBuildingTipPanel()) —
+ * Schlüssel sind dieselben Kind-Strings wie in main.ts' PaletteKind (nur Bau-relevante: Quelle/
+ * Spiegel/beide Prisma-Arten, nicht 'expand-grid' — das ist keine "Gebäudeart") bzw. TowerKind. */
+export type BuildingTipKind = 'source' | 'mirror' | 'prism-simple' | 'prism-complex' | TowerKind
+
+interface BuildingTipContent {
+  title: string
+  body: string
+}
+
+const BUILDING_TIPS: Record<BuildingTipKind, BuildingTipContent> = {
+  source: {
+    title: 'Light Source',
+    body: 'Emits a beam of its color in all 6 directions at once. Route a beam into a tower to arm it, or into a prism to mix colors. Select it and use UPGRADE to increase its range.',
+  },
+  mirror: {
+    title: 'Mirror',
+    body: "Redirects any beam that hits it — light or the enemy path — by 60°. Click it to rotate. It's the only building allowed directly on the enemy path.",
+  },
+  'prism-simple': {
+    title: 'Triangle Prism',
+    body: 'Mixes 2 incoming beams into a stronger combined color, once both source colors are active somewhere. Click it to rotate which corner receives the beams.',
+  },
+  'prism-complex': {
+    title: 'Hexagon Prism',
+    body: 'Mixes up to 5 incoming beams into a powerful combined color. Click it to rotate. Unlocks once the required color tier is active.',
+  },
+  rapid: {
+    title: 'Rapid Tower',
+    body: 'Very high fire rate, low damage per hit — a reliable all-rounder, especially early on.',
+  },
+  cannon: {
+    title: 'Cannon Tower',
+    body: 'Slow projectiles that deal splash damage on impact — strong against groups of enemies.',
+  },
+  sniper: {
+    title: 'Sniper Tower',
+    body: 'Slow fire rate, very long range, high single-target damage — best against tough single enemies.',
+  },
+  multishot: {
+    title: 'Multishot Tower',
+    body: 'Fires several projectiles at once, each at a different target.',
+  },
+  pulse: {
+    title: 'Pulse Tower',
+    body: "Pulses 360° around itself with short range and low damage — its role is spreading status-effect stacks (Burn, Poison, ...), not raw damage.",
+  },
+  flamethrower: {
+    title: 'Flamethrower Tower',
+    body: 'Burns a continuous cone-shaped stream in front of it, hitting everything caught inside.',
+  },
+  burst: {
+    title: 'Burst Tower',
+    body: 'Charges up, then fires a powerful volley of projectiles all at once.',
+  },
+  beam: {
+    title: 'Beam Tower',
+    body: 'Locks a permanent laser onto one target and keeps firing as long as it stays in range.',
+  },
+}
+
+const BUILDING_TIP_MAX_WIDTH = 460
+const BUILDING_TIP_MAX_HEIGHT = 240
+
+export function hitTestBuildingTipClose(width: number, height: number, x: number, y: number): boolean {
+  const b = panelBounds(width, height, BUILDING_TIP_MAX_WIDTH, BUILDING_TIP_MAX_HEIGHT).closeButton
+  return x >= b.x && x <= b.x + b.size && y >= b.y && y <= b.y + b.size
+}
+
+/** Erstbau-Tipp-Feld (User-Vorgabe: "wenn eine Gebäudeart das erste mal gebaut wird, soll das
+ * Spiel pausiert werden, ein kleines Feld geht auf... wie es funktioniert, was es macht, welche
+ * Optionen man hat") — ein kompaktes Modal (kleiner als das Quick-Start-Panel, ein einzelner
+ * kurzer Absatz braucht nicht dessen volle Größe), sonst dieselbe Chrome/Close-Mechanik. main.ts
+ * entscheidet EINMAL pro Gebäude-/Turmart (nicht pro Instanz/Farbe), ob dieses Feld überhaupt
+ * aufgerufen wird (siehe dort, seenBuildingTips/tipsDisabled). */
+export function drawBuildingTipPanel(ctx: CanvasRenderingContext2D, width: number, height: number, kind: BuildingTipKind) {
+  const content = BUILDING_TIPS[kind]
+  const bounds = drawPanelChrome(ctx, width, height, content.title.toUpperCase(), undefined, BUILDING_TIP_MAX_WIDTH, BUILDING_TIP_MAX_HEIGHT)
+
+  const padding = 24
+  ctx.save()
+  ctx.textAlign = 'left'
+  ctx.fillStyle = COLORS.textMid
+  ctx.font = '14px monospace'
+  const lines = wrapLines(ctx, content.body, bounds.width - padding * 2, 6)
+  let cursorY = bounds.y + 68
+  for (const line of lines) {
+    ctx.fillText(line, bounds.x + padding, cursorY)
+    cursorY += 19
+  }
   ctx.restore()
 }

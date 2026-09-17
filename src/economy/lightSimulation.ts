@@ -56,24 +56,24 @@
 //
 // Strahl-"Stärke" (User-Vorgabe, ersetzt die frühere feste Rate/Sekunde je Lichtquelle bzw.
 // Ausgabe-Rate je Prisma): ein Strahl hat an jeder Zelle die Stärke = wie viele Zellen er von DORT
-// aus noch zurücklegen könnte (`Front.stepsLeft`, siehe unten) — ein Level-1-Generator (Reichweite
-// 3) liefert an einen 1 Zelle entfernten Turm also Stärke 2, und GENAU das ist dann die Menge, mit
-// der dieser Turm gerade "versorgt" ist (siehe main.ts hasAmmoAvailable()). Erreicht ein Strahl
-// stattdessen ein Prisma, zählt NUR diese Stärke (nicht Farbe/Rezept) mit in dessen Durchschnitt
-// ein (siehe `registerHit()`): kommen mehrere Strahlen an, wird ihre Stärke addiert und durch ihre
-// Anzahl geteilt (Standard-Rundung), und GENAU dieser Wert ist dann sowohl die Stärke, mit der das
-// Prisma (sobald sein Rezept erfüllt ist) selbst weiterstrahlt, als auch entsprechend viele Zellen
-// weit reicht (siehe `prismAvgStrength`/`simulateLight()`) — Prismen haben dafür kein eigenes
-// Level mehr (User-Vorgabe, entfernt).
+// aus noch zurücklegen könnte (`Front.stepsLeft`, siehe unten). Erreicht ein Strahl ein Prisma,
+// zählt NUR diese Stärke (nicht Farbe/Rezept) mit in dessen Durchschnitt ein (siehe
+// `registerHit()`): kommen mehrere Strahlen an, wird ihre Stärke addiert und durch ihre Anzahl
+// geteilt (Standard-Rundung), und GENAU dieser Wert ist dann sowohl die Stärke, mit der das Prisma
+// (sobald sein Rezept erfüllt ist) selbst weiterstrahlt, als auch entsprechend viele Zellen weit
+// reicht (siehe `prismAvgStrength`/`simulateLight()`) — Prismen haben dafür kein eigenes Level mehr
+// (User-Vorgabe, entfernt). Türme dagegen ist ihre ankommende Strahl-Stärke egal (User-Vorgabe:
+// "es ist nur relevant, ob der Lichtstrahl ankommt") — sie brauchen also, anders als Prismen, KEINE
+// Mindest-Stärke, nur überhaupt eine Farbe (siehe `hitTower` unten).
 //
 // Türme als Strahl-Ziel (User-Vorgabe, ersetzt Container): ein Strahl, der einen Turm erreicht,
-// liefert genau wie früher bei einem Container seine Farbe + Stärke dorthin (siehe `hitTower`
-// unten) — das IST jetzt die Munition des Turms, keine manuelle Auswahl mehr nötig (siehe
-// main.ts). Erreichen MEHRERE, unterschiedlich gefärbte Strahlen denselben Turm im selben
-// Durchlauf, gewinnt der zuerst in `fronts` verarbeitete (siehe `tracePass()` — dieselbe stabile
-// "erster gewinnt"-Reihenfolge, mit der Container früher ihre Kapazitäts-Slots vergeben haben).
-// Anders als ein Dreieck-Prisma nimmt ein Turm einen Strahl aus JEDER der 6 Richtungen an (wie ein
-// Hexagon-Prisma) — er hat keine "Seiten", die eine Form vorgeben.
+// liefert genau wie früher bei einem Container seine Farbe dorthin (siehe `hitTower` unten) — das
+// IST jetzt die Munition des Turms, keine manuelle Auswahl mehr nötig (siehe main.ts). Erreichen
+// MEHRERE, unterschiedlich gefärbte Strahlen denselben Turm im selben Durchlauf, gewinnt der
+// zuerst in `fronts` verarbeitete (siehe `tracePass()` — dieselbe stabile "erster gewinnt"-
+// Reihenfolge, mit der Container früher ihre Kapazitäts-Slots vergeben haben). Anders als ein
+// Dreieck-Prisma nimmt ein Turm einen Strahl aus JEDER der 6 Richtungen an (wie ein Hexagon-
+// Prisma) — er hat keine "Seiten", die eine Form vorgeben.
 //
 // Gegner-Pfad als Strahl-Hindernis (User-Vorgabe: "die Farbverbindungen sollen vom Weg der Enemies
 // geblockt werden, nicht andersherum" — der Gegner-Pfad selbst hängt NICHT von Strahlen ab, siehe
@@ -87,7 +87,7 @@
 // NICHT betroffen — der Pfad endet ja ohnehin genau auf ihrer eigenen Zelle, die bleibt ihr
 // gültiges Licht-Ziel/-Quelle.
 
-import { RESOURCES, getResource, type ResourceDefinition } from '../data/resources'
+import { RESOURCES, getResource, type ResourceDefinition, type ResourceTier } from '../data/resources'
 import { cellKey, hexNeighbor, inBounds, type GridCoord, type HexDirection, type PlacementGrid } from '../grid/placementGrid'
 import { reflect, type EconomyBuilding, type LightColor, type LightSource, type Mirror, type Prism } from './buildings'
 
@@ -126,10 +126,12 @@ export interface SimulationResult {
   segments: BeamSegment[]
   /** Prisma-Id -> aktueller Status. */
   prismStatus: Map<string, PrismStatus>
-  /** Turm-Id -> die Farbe + Stärke, die ihn gerade (direkt oder über Spiegel/Prismen) erreicht —
-   * das IST seine aktuelle Munition (siehe main.ts economyTick()/hasAmmoAvailable()), keine
-   * manuelle Auswahl mehr. Kein Eintrag = gerade kein Strahl angeschlossen. */
-  towerAmmo: Map<string, { resourceId: string; strength: number }>
+  /** Turm-Id -> die Farbe, die ihn gerade (direkt oder über Spiegel/Prismen) erreicht — das IST
+   * seine aktuelle Munition (siehe main.ts economyTick()), keine manuelle Auswahl mehr. Die
+   * Strahl-STÄRKE spielt für Türme keine Rolle (User-Vorgabe: "es ist nur relevant, ob der
+   * Lichtstrahl ankommt") — anders als bei Prismen, daher hier bewusst kein `strength`-Feld. Kein
+   * Eintrag = gerade kein Strahl angeschlossen. */
+  towerAmmo: Map<string, { resourceId: string }>
   /** Lichtquellen-Ids, deren Strahl gerade (direkt oder über Spiegel) mindestens einen Turm
    * erreicht — fürs Info-Panel ("liefert gerade" vs. "läuft ins Leere"). */
   activeSourceIds: Set<string>
@@ -225,14 +227,16 @@ interface Front {
    * Kette am Ende einen Turm"-Tracking (siehe `simulateLight()` activeSourceIds). */
   prismId?: string
   /** Wie viele weitere Zellen dieser Strahl noch zurücklegen kann — sinkt mit jedem Schritt um 1.
-   * Das ist zugleich seine "Stärke" (User-Vorgabe): kommt er bei einem Turm oder Prisma an, ist
-   * der dort gerade noch übrige Wert (NACH dem letzten Schritt) genau die Menge, die
-   * ankommt/weitergegeben wird — siehe die `hitTower`-Zuweisung in `traceAllFronts()`/`registerHit()`. */
+   * Das ist zugleich seine "Stärke" (User-Vorgabe): kommt er bei einem PRISMA an, ist der dort
+   * gerade noch übrige Wert (NACH dem letzten Schritt) genau die Menge, die weitergegeben wird
+   * (siehe `registerHit()`) — bei einem TURM zählt dagegen nur noch, DASS überhaupt etwas ankommt
+   * (User-Vorgabe: "es ist nur relevant, ob der Lichtstrahl ankommt"), daher trägt `hitTower`
+   * bewusst keine Stärke mehr. */
   stepsLeft: number
   alive: boolean
   reachedEndpoint: boolean
   hitPrism?: { prism: Prism; fromDirection: HexDirection }
-  hitTower?: { towerId: string; resourceId: string; strength: number }
+  hitTower?: { towerId: string; resourceId: string }
 }
 
 /**
@@ -329,7 +333,7 @@ function traceAllFronts(grid: PlacementGrid, lookup: Map<string, LightOccupant>,
         front.cells.push(next)
         front.alive = false
         front.reachedEndpoint = true
-        front.hitTower = { towerId: occupant.id, resourceId: front.resourceId, strength: front.stepsLeft }
+        front.hitTower = { towerId: occupant.id, resourceId: front.resourceId }
         continue
       }
       if (occupant.kind === 'path') {
@@ -370,9 +374,9 @@ interface TracePass {
    * erreicht haben (siehe `registerHit()`) — das ist die Stärke, mit der es selbst (sobald sein
    * Rezept erfüllt ist) im NÄCHSTEN Durchlauf weiterstrahlt (siehe `simulateLight()`). */
   prismAvgStrength: Map<string, number>
-  /** Turm-Id -> Farbe + Stärke des ERSTEN Strahls, der ihn in diesem Durchlauf erreicht hat (siehe
+  /** Turm-Id -> Farbe des ERSTEN Strahls, der ihn in diesem Durchlauf erreicht hat (siehe
    * `simulateLight()`-Dateikommentar zu "erster gewinnt" bei mehrfarbigen Treffern). */
-  towerHits: Map<string, { resourceId: string; strength: number }>
+  towerHits: Map<string, { resourceId: string }>
   /** Direkt trifft (nicht transitiv) — nur Quellen, deren Strahl SELBST einen Turm erreicht hat. */
   activeSourceIds: Set<string>
   /** Direkt-Eingänge je Prisma in DIESEM Durchlauf — welche rohen Lichtquellen bzw. welche ANDEREN
@@ -451,7 +455,7 @@ function tracePass(
   const prismColors = new Map<string, Set<string>>()
   const prismSides = new Map<string, Set<HexDirection>>()
   const prismStrengthSums = new Map<string, { sum: number; count: number }>()
-  const towerHits = new Map<string, { resourceId: string; strength: number }>()
+  const towerHits = new Map<string, { resourceId: string }>()
   const activeSourceIds = new Set<string>()
   const directSourcesIntoPrism = new Map<string, Set<string>>()
   const directPrismsIntoPrism = new Map<string, Set<string>>()
@@ -507,7 +511,7 @@ function tracePass(
       // stets Quellen (in Array-Reihenfolge, alle 6 Richtungen) dann Prismen (in Array-Reihenfolge),
       // Durchlauf für Durchlauf identisch, also eine stabile, nicht "flackernde" Priorität.
       if (!towerHits.has(front.hitTower.towerId)) {
-        towerHits.set(front.hitTower.towerId, { resourceId: front.hitTower.resourceId, strength: front.hitTower.strength })
+        towerHits.set(front.hitTower.towerId, { resourceId: front.hitTower.resourceId })
       }
       if (front.isRawSource && front.sourceId) activeSourceIds.add(front.sourceId)
       else if (front.prismId) prismsFeedingTower.add(front.prismId)
@@ -533,9 +537,15 @@ function tracePass(
   }
 }
 
-function resolveTriangleOutput(presentColors: Set<string>): ResourceDefinition | null {
+/** User-Vorgabe (Progress-System): "Tier 2, 3, 4, 5 sollen erst freigeschaltet werden, wenn die
+ * Farben des vorherigen Tiers aktiv sind" — ein Prisma darf ein Rezept nur auflösen, dessen
+ * Ergebnis-Tier bereits freigeschaltet ist (main.ts pflegt `unlockedTiers` dauerhaft, siehe dort
+ * updateColorTierUnlocks()); sonst bleibt es unkonfiguriert (weiß), selbst wenn die richtigen
+ * Zutaten anliegen. */
+function resolveTriangleOutput(presentColors: Set<string>, unlockedTiers: Set<ResourceTier>): ResourceDefinition | null {
   if (presentColors.size < 2) return null
   for (const r of RESOURCES) {
+    if (!unlockedTiers.has(r.tier)) continue
     if (!r.triangleRecipe) continue
     if (r.triangleRecipe.length !== presentColors.size) continue
     if (r.triangleRecipe.every((id) => presentColors.has(id))) return r
@@ -543,11 +553,11 @@ function resolveTriangleOutput(presentColors: Set<string>): ResourceDefinition |
   return null
 }
 
-function resolveHexagonOutput(counts: { c: number; m: number; y: number }, presentColors: Set<string>): ResourceDefinition | null {
+function resolveHexagonOutput(counts: { c: number; m: number; y: number }, presentColors: Set<string>, unlockedTiers: Set<ResourceTier>): ResourceDefinition | null {
   const distinctChannels = [counts.c, counts.m, counts.y].filter((n) => n > 0).length
   if (distinctChannels >= 2) {
     const ratioMatch = RESOURCES.find(
-      (r) => r.tier !== 1 && r.hexagonRecipe && r.hexagonRecipe.c === counts.c && r.hexagonRecipe.m === counts.m && r.hexagonRecipe.y === counts.y,
+      (r) => r.tier !== 1 && unlockedTiers.has(r.tier) && r.hexagonRecipe && r.hexagonRecipe.c === counts.c && r.hexagonRecipe.m === counts.m && r.hexagonRecipe.y === counts.y,
     )
     if (ratioMatch) return ratioMatch
   }
@@ -557,6 +567,7 @@ function resolveHexagonOutput(counts: { c: number; m: number; y: number }, prese
   // fürs Rezept irrelevante) Eingänge dürfen das nicht verhindern — sonst würde "bis zu 5
   // Eingänge" für diese beiden Farben faktisch nie mehr als exakt 3 erlauben.
   for (const r of RESOURCES) {
+    if (!unlockedTiers.has(r.tier)) continue
     if (!r.hexagonNamedRecipe) continue
     if (r.hexagonNamedRecipe.every((id) => presentColors.has(id))) return r
   }
@@ -570,6 +581,7 @@ export function simulateLight(
   prisms: Prism[],
   towers: { id: string; col: number; row: number }[],
   enemyPathCells: GridCoord[],
+  unlockedTiers: Set<ResourceTier>,
 ): SimulationResult {
   const lookup = buildLookup(sources, mirrors, prisms, towers, enemyPathCells)
 
@@ -600,7 +612,7 @@ export function simulateLight(
       if (prismOutputs.get(prism.id)) continue // bereits aufgelöst -> gesperrt, siehe Datei-Kommentar
       const counts = pass.prismCounts.get(prism.id) ?? { c: 0, m: 0, y: 0 }
       const colors = pass.prismColors.get(prism.id) ?? new Set<string>()
-      const resolved = prism.prismKind === 'triangle' ? resolveTriangleOutput(colors) : resolveHexagonOutput(counts, colors)
+      const resolved = prism.prismKind === 'triangle' ? resolveTriangleOutput(colors, unlockedTiers) : resolveHexagonOutput(counts, colors, unlockedTiers)
       if (resolved) {
         nextOutputs.set(prism.id, resolved)
         if (prism.prismKind === 'triangle') {

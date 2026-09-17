@@ -24,7 +24,6 @@ import {
   gridPixelWidth,
   GRID_EXPAND_COST,
   hexColumnWidth,
-  hexNeighbor,
   inBounds,
   nearestCell,
   type GridCoord,
@@ -59,6 +58,7 @@ import {
 import { buildHudButtons, drawHud, hitTestButton, HUD_HEIGHT, type HudButton } from './render/hud'
 import {
   buildTowerPalette,
+  drawLockedTowerPlaceholder,
   drawTowerEntity,
   drawTowerLevelRing,
   drawTowerPaletteItem,
@@ -69,14 +69,23 @@ import {
   type TowerPaletteItem,
 } from './render/towerRender'
 import { getEffectiveTowerStats, createTower, getTowerDefinition, loadoutKey, towerUpgradeCost, TOWER_DEFINITIONS, TOWER_MAX_LEVEL, type PlacedTower, type TowerKind } from './towerdefense/towers'
-import { getResource, RESOURCES } from './data/resources'
+import { getResource, RESOURCES, type ResourceTier } from './data/resources'
 import { drawLabel } from './render/shapes'
 import { drawPath, pathTotalLength, type Point } from './towerdefense/path'
 import { updateProjectiles, updateTowers, pruneVisualEffects, type Projectile, type VisualEffect } from './towerdefense/combat'
 import { activeStackCounts, pruneEnemies, tickEnemy, type Enemy } from './towerdefense/enemies'
 import { createWaveState, isBossWave, tickWaveSpawning, BOSS_LUMEN_MULTIPLIER, BOSS_WAVE_PAUSE_SECONDS, WAVE_PAUSE_SECONDS, type WaveState } from './towerdefense/waves'
 import { drawEnemies, drawProjectiles, drawTowerCombatEffects, drawVisualEffects } from './render/combatRender'
-import { drawColorGuideList, drawColorGuideSidebarTitle, drawWelcomePanel, hitTestReferencePanelClose } from './render/referencePanels'
+import {
+  drawBuildingTipPanel,
+  drawColorGuideList,
+  drawColorGuideSidebarTitle,
+  drawWelcomePanel,
+  hitTestBuildingTipClose,
+  hitTestReferencePanelClose,
+  hitTestTipsToggle,
+  type BuildingTipKind,
+} from './render/referencePanels'
 import { drawCard, drawCenteredCostTag, drawCurrencyIcon, drawHeartIcon, drawProgressBar, drawSkullIcon, healthFractionColor } from './render/ui'
 
 const canvas = document.getElementById('scene') as HTMLCanvasElement
@@ -113,6 +122,65 @@ function markTutorialSeen() {
   }
 }
 let welcomeOpen = !hasSeenTutorial()
+
+// User-Vorgabe: "beim Quick-Start-Tutorial-Text soll es die Option geben, Tipps zu deaktivieren" —
+// EIN Häkchen im Quick-Start-Popup (siehe render/referencePanels.ts drawWelcomePanel()) schaltet
+// sowohl dieses Popup selbst (falls es künftig erneut geöffnet wird, siehe handleHudButton()) ALS
+// AUCH die neuen Erstbau-Tipp-Felder unten dauerhaft ab. Persistiert wie hasSeenTutorial().
+const TIPS_DISABLED_KEY = 'vectoid-tips-disabled'
+function loadTipsDisabled(): boolean {
+  try {
+    return localStorage.getItem(TIPS_DISABLED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+function persistTipsDisabled() {
+  try {
+    localStorage.setItem(TIPS_DISABLED_KEY, tipsDisabled ? '1' : '0')
+  } catch {
+    // Private-Browsing o. Ä. — dann merkt sich das Häkchen halt nichts über den Reload hinaus.
+  }
+}
+let tipsDisabled = loadTipsDisabled()
+
+// User-Vorgabe: "wenn eine Gebäudeart das erste Mal gebaut wird, soll das Spiel pausiert werden,
+// ein kleines Feld geht auf... wie es funktioniert, was es macht, welche Optionen man hat" — EINMAL
+// pro Gebäude-/Turmart (nicht pro Instanz/Farbe), persistiert wie hasSeenTutorial() (übersteht also
+// auch einen Base-HP-Softreset UND einen Seiten-Reload), es sei denn `tipsDisabled` ist gesetzt.
+const SEEN_BUILDING_TIPS_KEY = 'vectoid-seen-building-tips'
+function loadSeenBuildingTips(): Set<BuildingTipKind> {
+  try {
+    const raw = localStorage.getItem(SEEN_BUILDING_TIPS_KEY)
+    return raw ? new Set(JSON.parse(raw)) : new Set()
+  } catch {
+    return new Set()
+  }
+}
+function persistSeenBuildingTips() {
+  try {
+    localStorage.setItem(SEEN_BUILDING_TIPS_KEY, JSON.stringify([...seenBuildingTips]))
+  } catch {
+    // s.o.
+  }
+}
+let seenBuildingTips = loadSeenBuildingTips()
+/** Aktuell offenes Erstbau-Tipp-Feld (siehe render/referencePanels.ts drawBuildingTipPanel()) —
+ * wie `welcomeOpen` ein blockierendes Mini-Modal, nur pro Gebäude-/Turmart statt einmalig fürs
+ * ganze Spiel. */
+let activeBuildingTip: BuildingTipKind | null = null
+
+/** Löst ggf. das Erstbau-Tipp-Feld für `kind` aus (siehe finalizePlacement()/
+ * finalizeTowerPlacement()) — pausiert das Spiel genau wie jede andere Auto-Pause hier (muss der
+ * Spieler bewusst per Klick auf den Pause/Play-Button wieder aufheben). Kein Effekt, wenn Tipps
+ * deaktiviert sind oder diese Art schon einmal gebaut wurde. */
+function maybeShowBuildingTip(kind: BuildingTipKind) {
+  if (tipsDisabled || seenBuildingTips.has(kind)) return
+  seenBuildingTips.add(kind)
+  persistSeenBuildingTips()
+  activeBuildingTip = kind
+  gamePaused = true
+}
 
 // Auswahl (Klick auf ein Gebäude/einen Turm): zeigt Name/Level/Produktionsdaten bzw.
 // Name/Munition/Level in der "SELECTED"-Karte der rechten Seitenleiste (siehe drawRightSidebar())
@@ -196,7 +264,7 @@ function buildScene() {
   const startX = width / 2 - (economyCount - 0.5) * PALETTE_GAP - PALETTE_GROUP_GAP / 2
   const towerStartX = width / 2 + PALETTE_GAP / 2 + PALETTE_GROUP_GAP / 2
   paletteItems = buildPalette(startX, PALETTE_ROW_Y, PALETTE_GAP)
-  towerPaletteItems = buildTowerPalette(towerStartX, PALETTE_ROW_Y, PALETTE_GAP)
+  towerPaletteItems = buildTowerPalette(towerStartX, PALETTE_ROW_Y, PALETTE_GAP, highestWaveReached)
 }
 
 // Das gemeinsame Raster (User-Vorgabe: "Instead of having the split between economy and defense,
@@ -213,11 +281,40 @@ let prisms: Prism[] = []
 let occupancy: Occupancy = new Map()
 let worldReady = false
 let lightSimulation: SimulationResult = { segments: [], prismStatus: new Map(), towerAmmo: new Map(), activeSourceIds: new Set() }
+// Performance (User-Vorgabe: "ab einer gewissen Anzahl an Türmen und Verbindungen habe ich FPS-
+// Einbrüche"): simulateLight() ist die mit Abstand teuerste Berechnung im Spiel (mehrere
+// Strahlverfolgungs-Durchläufe, JEDER davon mit einem eigenen Kollisions-Check zwischen ALLEN
+// gerade aktiven Strahl-Fronten) — sie hing bisher OHNE jede Not an JEDEM economyTick(), also 60x/
+// Sekunde, VÖLLIG UNABHÄNGIG davon, ob sich am Gebäude-Graphen (Quellen/Spiegel/Prismen/Türme/
+// Gegner-Pfad/freigeschaltete Farb-Tiers — GENAU die Eingaben von simulateLight()) überhaupt etwas
+// geändert hatte. Da sich diese Eingaben NUR durch einen expliziten Bau/Verschieben/Abriss/Drehen/
+// Grid-Ausbau/Tier-Freischalten ändern (nie von selbst mit der Zeit), reicht ein simpler Dirty-Flag:
+// JEDE Stelle, die eine dieser Eingaben verändert, markiert hier statt direkt (oder zusätzlich zum
+// bisherigen Jeden-Frame-Aufruf) neu zu rechnen — economyTick() rechnet dann höchstens EINMAL pro
+// tatsächlicher Änderung, nicht mehr 60x/Sekunde im Leerlauf.
+let lightNetworkDirty = true
+
+// Progress-System (User-Vorgabe): "damit man nicht von Anfang an alle Sachen hat und mit der
+// Masse überfordert ist" — zwei dauerhafte Freischalt-Zustände, BEIDE bewusst NICHT Teil von
+// `waveState`/`softResetRun()`: ein Base-HP-Softreset setzt nur die laufende Welle auf 1 zurück
+// (behält Gebäude/Türme/Währung), soll aber KEINE bereits erspielte Freischaltung wieder
+// wegnehmen — sonst müsste man nach jedem Softreset dieselben Meilensteine erneut erreichen.
+/** Höchste je erreichte Welle (im Gegensatz zu `waveState.currentWave`, das ein Softreset auf 1
+ * zurücksetzt) — bestimmt, welche Türme in der Kauf-Leiste auftauchen (siehe
+ * render/towerRender.ts buildTowerPalette(), TowerDefinition.unlockWave). */
+let highestWaveReached = 1
+/** Welche Farb-Tiers Prismen gerade mischen dürfen (siehe economy/lightSimulation.ts
+ * resolveTriangleOutput()/resolveHexagonOutput()) — Tier 1 ist immer frei (wird gekauft, nicht
+ * gemischt), Tier 2-5 schalten sich einzeln + dauerhaft frei, sobald ALLE Farben des jeweils
+ * vorherigen Tiers "aktiv" sind (siehe updateColorTierUnlocks()). */
+let unlockedColorTiers = new Set<ResourceTier>([1])
 
 // Endpunkt-Stein (User-Vorgabe: "Der Endpunkt soll ein Stein sein, genau in der Mitte oberhalb dem
 // Grid") — ein fester Punkt eine Zeile ÜBER dem eigentlichen Raster (row -1), horizontal zentriert.
-// Anders als der frühere Spawn ist er NICHT verschiebbar, nur seine Abstrahlrichtung ist per Klick
-// drehbar (`endpointDirection`). Da die Rasterbreite immer gerade ist (6/8/10/…/20, siehe
+// Weder verschiebbar noch drehbar (User-Vorgabe: "ich möchte das Ziel der Enemies nicht drehen
+// können, dieses soll fest in die aktuelle Richtung zeigen" — hebt die frühere Klick-zum-Drehen-
+// Interaktion wieder auf, siehe Git-Historie): `endpointDirection` ist eine feste Konstante, kein
+// `pointerdown`-Handler ändert sie mehr. Da die Rasterbreite immer gerade ist (6/8/10/…/20, siehe
 // expandGrid()), fällt die exakte Mitte zwischen zwei Spalten — row -1 hat ungerade Zeilen-Parität
 // (siehe placementGrid.ts rowParity()), deren Verschiebung um eine halbe Spaltenbreite genau das
 // ausgleicht: col = cols/2 - 1 (ganzzahlig) landet an derselben Pixel-Position wie "Spalte 2.5" in
@@ -225,23 +322,10 @@ let lightSimulation: SimulationResult = { segments: [], prismStatus: new Map(), 
 // User-Vorgabe: Standard-Abstrahlrichtung zeigt nach rechts statt links (die Startaufstellung
 // sitzt links im Raster, siehe buildWorld() — Richtung 4 hätte den Pfad direkt in den Cluster
 // hineinlaufen lassen, Richtung 5 führt stattdessen in die freie rechte Hälfte).
-let endpointDirection: HexDirection = 5
+const endpointDirection: HexDirection = 5
 
 function endpointNode(): GridCoord {
   return { col: placementGrid.cols / 2 - 1, row: -1 }
-}
-
-/** Nächste Richtung ab `from` (im Uhrzeigersinn), deren allererster Schritt tatsächlich ins Raster
- * hineinführt — Klick auf den Stein soll IMMER einen sichtbaren Pfad ergeben. Da der Stein eine
- * Zeile ÜBER dem Raster sitzt, führen nur 2 der 6 Richtungen überhaupt nach unten hinein (die
- * anderen 4 blieben in Zeile -1 oder gingen weiter nach oben weg) — ein simples "+1" würde also
- * die meiste Zeit in einem unsichtbaren Nullweg landen. */
-function nextValidEndpointDirection(from: HexDirection): HexDirection {
-  for (let i = 1; i <= 6; i++) {
-    const candidate = ((from + i) % 6) as HexDirection
-    if (inBounds(placementGrid, hexNeighbor(endpointNode(), candidate))) return candidate
-  }
-  return from
 }
 
 let enemyPathPixels: Point[] = []
@@ -282,7 +366,41 @@ function rebuildOccupancy() {
  * Pfad durch sie hindurch umgelenkt wird, genau wie Licht. Muss NACH recomputeEnemyPath()
  * aufgerufen werden, damit `enemyPathCells` aktuell ist. */
 function recomputeLightSimulation() {
-  lightSimulation = simulateLight(placementGrid, lightSources, mirrors, prisms, towers, enemyPathCells)
+  lightSimulation = simulateLight(placementGrid, lightSources, mirrors, prisms, towers, enemyPathCells, unlockedColorTiers)
+}
+
+/** Ob mindestens eine Quelle/ein Prisma GERADE genau `resourceId` liefert (User-Vorgabe: "sie
+ * müssen nicht auf ein Turm zeigen, aber alle aktiv sein") — für Tier-1-Farben (nie ein Prisma-
+ * Ergebnis, siehe resolveTriangleOutput()/resolveHexagonOutput()) heißt das schlicht "eine
+ * Lichtquelle dieser Farbe existiert" (die strahlt ja immer, sobald platziert); für gemischte
+ * Farben (Tier 2+): ein Prisma hat sie GERADE erfolgreich gemischt, unabhängig davon, wohin sein
+ * eigener Ausgabestrahl von dort aus weiterläuft. */
+function isResourceCurrentlyActive(resourceId: string): boolean {
+  if (lightSources.some((s) => s.resourceId === resourceId)) return true
+  for (const status of lightSimulation.prismStatus.values()) {
+    if (status.output?.id === resourceId) return true
+  }
+  return false
+}
+
+/** Progress-System (User-Vorgabe): schaltet Tier N+1 dauerhaft frei, sobald ALLE Farben von Tier N
+ * gerade aktiv sind (siehe isResourceCurrentlyActive()) — geprüft nach jedem recomputeLightSimulation(),
+ * damit `lightSimulation.prismStatus` aktuell ist. Kaskadiert automatisch über mehrere Frames
+ * (Tier 3 kann erst geprüft werden, NACHDEM Tier 2 schon freigeschaltet ist und ein Prisma davon
+ * überhaupt mischen darf) — kein Problem, ein Tier später freizuschalten kostet höchstens ein paar
+ * Frames. */
+function updateColorTierUnlocks() {
+  const tierOrder: ResourceTier[] = [1, 2, 3, 4, 5]
+  for (let i = 0; i < tierOrder.length - 1; i++) {
+    const tier = tierOrder[i]
+    const nextTier = tierOrder[i + 1]
+    if (unlockedColorTiers.has(nextTier)) continue
+    if (!unlockedColorTiers.has(tier)) break
+    const tierResources = RESOURCES.filter((r) => r.tier === tier)
+    if (tierResources.length > 0 && tierResources.every((r) => isResourceCurrentlyActive(r.id))) {
+      unlockedColorTiers.add(nextTier)
+    }
+  }
 }
 
 /** Gegner-Pfad: strahlt ab dem festen Endpunkt-Stein (`endpointNode()`) los, statt wie zuvor vom
@@ -294,9 +412,18 @@ function recomputeLightSimulation() {
  * ist `enemyPathPixels[0]` die dynamische Einlauf-Stelle (progress 0) und das letzte Element der
  * feste Stein (progress 1), identisch zum bisherigen "0 = Spawn, 1 = Basis"-Vertrag (siehe
  * towerdefense/path.ts). Muss nach JEDER Änderung an Spiegeln/Lichtquellen/Prismen/Türmen neu
- * aufgerufen werden (danach immer auch recomputeLightSimulation(), damit Strahlen den NEUEN Pfad
- * berücksichtigen). */
+ * aufgerufen werden (markiert danach immer auch die Licht-Simulation als neu zu berechnen, siehe
+ * `lightNetworkDirty`, damit Strahlen den NEUEN Pfad berücksichtigen — die eigentliche, teure
+ * Neuberechnung passiert dann einmalig im nächsten economyTick(), nicht synchron hier). */
+/** Zwei Zellketten strukturell vergleichen (Reihenfolge UND Inhalt) — für die "Pfad hat sich
+ * verändert"-Erkennung in recomputeEnemyPath() unten. */
+function pathCellsEqual(a: GridCoord[], b: GridCoord[]): boolean {
+  if (a.length !== b.length) return false
+  return a.every((cell, i) => cellKey(cell) === cellKey(b[i]))
+}
+
 function recomputeEnemyPath() {
+  const previousPathCells = enemyPathCells
   const blockers = [...lightSources, ...prisms, ...towers].map((b) => ({ id: b.id, col: b.col, row: b.row }))
   const lookup = buildDefenseLookup(mirrors, blockers)
   const maxSteps = (placementGrid.cols + placementGrid.rows) * 4 // Sicherheitsbremse gg. Spiegel-Endlosschleife
@@ -306,7 +433,19 @@ function recomputeEnemyPath() {
   enemyPathPixels = enemyPathCells.map((c) => cellCenter(placementGrid, c))
   enemyPathLength = pathTotalLength(enemyPathPixels)
   pathHitBlockerId = hitBlockerId
-  recomputeLightSimulation() // Strahlen müssen den ggf. geänderten Pfad sofort als Blocker sehen
+  lightNetworkDirty = true // Strahlen müssen den ggf. geänderten Pfad als Blocker sehen (siehe oben)
+
+  // User-Vorgabe: "wenn ich einen Spiegel drehe, der den Weg beeinflusst, soll das Spiel pausiert
+  // werden, eigentlich immer, wenn sich der Weg verändert" — generalisiert die frühere Spiegel-
+  // spezifische Pause (Bug-Fix aus einer vorigen Runde, siehe finalizePlacement()/finalizeMove())
+  // auf JEDE Ursache einer Pfad-Änderung (Spiegel drehen/verschieben/platzieren, jedes andere
+  // Gebäude bauen/verschieben/abreißen, Raster erweitern — alles ruft diese Funktion auf).
+  // `previousPathCells.length === 0` beim allerersten Aufruf (aus buildWorld()) zählt bewusst NICHT
+  // als "Änderung" (kein Vorgänger-Pfad zum Vergleichen). Muss der Spieler wie jede andere Auto-
+  // Pause bewusst per Klick auf den Pause/Play-Button wieder aufheben.
+  if (previousPathCells.length > 0 && !pathCellsEqual(previousPathCells, enemyPathCells)) {
+    gamePaused = true
+  }
 }
 
 function buildingCenter(b: { col: number; row: number }) {
@@ -334,24 +473,28 @@ function buildWorld() {
   // row0, Spalte1 -> col0):
   //   Reihe1: leer, Cyan-Generator(col1), Rapid-Turm(col2), leer, leer, leer
   //   Reihe2: Spiegel(col0), Dreieck-Prisma(col1), leer, leer, leer, leer
-  //   Reihe3: leer, Yellow-Generator(col1), leer, Pulse-Turm(col3), leer, leer
+  //   Reihe3: leer, Yellow-Generator(col1), leer, Rapid-Turm(col3), leer, leer
   // Cyan strahlt (wie jede Lichtquelle gleichzeitig in alle 6 Richtungen) sowohl direkt in den
-  // Rapid-Turm als auch direkt ins Prisma (2 verschiedene der 6 Richtungen) — der Spiegel liegt
-  // ebenfalls auf einer von Cyans Richtungen, sein umgelenkter Strahl trifft dabei zufällig auf
-  // keine gültige Prisma-Ecke (rein dekorativ, zeigt "Verbindung ohne Ziel" halbtransparent).
-  // Yellow strahlt direkt ins Prisma UND (2 Zellen weiter in derselben Richtung) in den
-  // Pulse-Turm. Prisma-Anker bleibt beim Default (0) stehen — Cyans und Yellows direkte Ecken
+  // ersten Rapid-Turm als auch direkt ins Prisma (2 verschiedene der 6 Richtungen) — der Spiegel
+  // liegt ebenfalls auf einer von Cyans Richtungen, sein umgelenkter Strahl trifft dabei zufällig
+  // auf keine gültige Prisma-Ecke (rein dekorativ, zeigt "Verbindung ohne Ziel" halbtransparent).
+  // Yellow strahlt direkt ins Prisma UND (2 Zellen weiter in derselben Richtung) in den zweiten
+  // Rapid-Turm. Prisma-Anker bleibt beim Default (0) stehen — Cyans und Yellows direkte Ecken
   // (2 bzw. 4) liegen beide im selben Ecken-Set {0,2,4}, das Rezept Cyan+Yellow=Green löst also auf.
+  // User-Vorgabe (Progress-System): der zweite Startturm war bisher ein Pulse-Turm — Pulse ist
+  // jetzt aber erst ab Welle 15 freigeschaltet (siehe towerdefense/towers.ts unlockWave), ein
+  // Spieler hätte also von Anfang an einen Turmtyp gesehen, den er noch gar nicht kaufen kann.
+  // Stattdessen ein zweiter Rapid-Turm (der einzige, der von Welle 1 an verfügbar ist).
   lightSources = [createLightSource(1, 0, 'cyan'), createLightSource(1, 2, 'yellow')]
   mirrors = [createMirror(0, 1)]
   prisms = [createPrism(1, 1, 'triangle')]
-  towers = [createTower(nextTowerId(), 'rapid', 2, 0), createTower(nextTowerId(), 'pulse', 3, 2)]
+  towers = [createTower(nextTowerId(), 'rapid', 2, 0), createTower(nextTowerId(), 'rapid', 3, 2)]
   enemies = []
   waveState = createWaveState()
 
   rebuildOccupancy()
   worldReady = true
-  recomputeEnemyPath() // ruft am Ende auch recomputeLightSimulation() auf (siehe dort)
+  recomputeEnemyPath() // markiert am Ende lightNetworkDirty (siehe dort) statt direkt neu zu rechnen
 }
 
 /** Erweitert das gemeinsame Raster (User-Vorgabe: "6x6 starten, bis 20x20 — pro Kauf 1 Spalte
@@ -515,14 +658,6 @@ function hitTestTower(x: number, y: number): PlacedTower | null {
   return towers.find((t) => Math.hypot(towerCenter(t).x - x, towerCenter(t).y - y) <= TOWER_ICON_SIZE + 6) ?? null
 }
 
-/** Endpunkt-Stein anfassen — anders als früher beim Spawn kein Halten+Ziehen mehr (er ist fix
- * positioniert, siehe endpointNode()), ein Klick dreht direkt seine Abstrahlrichtung (wie ein
- * Prisma), ohne den pendingPress-Umweg über Klick-vs-Ziehen. */
-function hitTestEndpoint(x: number, y: number): boolean {
-  const center = cellCenter(placementGrid, endpointNode())
-  return Math.hypot(center.x - x, center.y - y) <= 20
-}
-
 /** Löscht ein Gebäude (Lichtquelle/Spiegel/Prisma) und erstattet seinen Lumen-Baukosten zurück
  * (User-Wunsch) — jedes davon kann den Gegner-Pfad blockiert haben, daher immer beide Neu-
  * Berechnungen (Belegung + Pfad) danach. */
@@ -557,6 +692,11 @@ function attemptLevelUp(target: InfoTarget) {
     if (!canAfford(inventory, 'lumen', cost)) return
     spend(inventory, 'lumen', cost)
     upgradeLightSource(source)
+    // Level bestimmt source.range (siehe economy/buildings.ts upgradeLightSource()) — das ist eine
+    // Eingabe von simulateLight(), also muss die Licht-Simulation das neu sehen (Performance-Fix:
+    // ohne diese Zeile bliebe die größere Reichweite unsichtbar, bis irgendetwas ANDERES zufällig
+    // neu baut/verschiebt/dreht).
+    lightNetworkDirty = true
   } else {
     const tower = towers.find((t) => t.id === target.id)
     if (!tower || tower.level >= TOWER_MAX_LEVEL) return
@@ -601,19 +741,33 @@ function handleHudButton(id: HudButton['id']) {
   if (id === 'cheat') cheatAddHundredToAll(inventory)
   else if (id === 'demolish') demolishMode = !demolishMode
   else if (id === 'pause') gamePaused = !gamePaused
-  // 'settings', 'save' und 'menu': absichtlich ohne Funktion (User-Wunsch — noch keine Logik dahinter).
+  // Öffnet das Quick-Start-Popup erneut (User-Vorgabe braucht einen Weg zum "Disable tips"-Häkchen
+  // auch NACH dem allerersten Start, sonst wäre es für wiederkehrende Spieler unerreichbar).
+  else if (id === 'settings') welcomeOpen = true
+  // 'save' und 'menu': absichtlich ohne Funktion (User-Wunsch — noch keine Logik dahinter).
 }
 
 canvas.addEventListener('pointerdown', (e) => {
   const pos = pointerPos(e)
   const worldPos = worldPointerPos(e)
 
-  // Tutorial-Popup blockiert alles andere, solange offen (nur beim allerersten Start).
+  // Tutorial-Popup blockiert alles andere, solange offen (nur beim allerersten Start) — das
+  // "Disable tips"-Häkchen darin (User-Vorgabe) schaltet zusätzlich zum Schließen selbst.
   if (welcomeOpen) {
     if (hitTestReferencePanelClose(width, height, pos.x, pos.y)) {
       welcomeOpen = false
       markTutorialSeen()
+    } else if (hitTestTipsToggle(width, height, pos.x, pos.y)) {
+      tipsDisabled = !tipsDisabled
+      persistTipsDisabled()
     }
+    return
+  }
+
+  // Erstbau-Tipp-Feld (User-Vorgabe) blockiert genau wie das Tutorial-Popup alles andere, bis es
+  // geschlossen wird.
+  if (activeBuildingTip) {
+    if (hitTestBuildingTipClose(width, height, pos.x, pos.y)) activeBuildingTip = null
     return
   }
 
@@ -665,14 +819,6 @@ canvas.addEventListener('pointerdown', (e) => {
     return
   }
 
-  if (hitTestEndpoint(worldPos.x, worldPos.y)) {
-    // Kein Halten+Ziehen und kein Abriss für den Endpunkt-Stein (fix positioniert, immer genau 1)
-    // — ein Klick dreht direkt seine Abstrahlrichtung, ohne den pendingPress-Umweg.
-    endpointDirection = nextValidEndpointDirection(endpointDirection)
-    recomputeEnemyPath()
-    return
-  }
-
   const economyHit = hitTestEconomyBuilding(worldPos.x, worldPos.y)
   if (economyHit) {
     if (demolishMode) {
@@ -697,7 +843,7 @@ canvas.addEventListener('pointerdown', (e) => {
 canvas.addEventListener('pointermove', (e) => {
   const pos = pointerPos(e)
   const worldPos = worldPointerPos(e)
-  if (welcomeOpen) return
+  if (welcomeOpen || activeBuildingTip) return
 
   hoveredEconomyItem = hitTestPalette(paletteItems, pos.x, pos.y)
   hoveredTowerItem = hitTestTowerPalette(towerPaletteItems, pos.x, pos.y)
@@ -735,8 +881,9 @@ function finalizePlacement(pos: Point) {
   // User-Vorgabe: "es soll nicht möglich sein, Gebäude jeglicher Art auf den Weg der Enemies zu
   // stellen, diese sollen blockiert werden, lediglich Mirrors können dort platziert werden" — der
   // Pfad selbst lenkt Spiegel schon um (siehe recomputeEnemyPath()), sie sind also die einzige
-  // Ausnahme. Ein frisch platzierter Spiegel AUF dem (alten) Pfad pausiert danach automatisch das
-  // Spiel (siehe unten) — muss der Spieler bewusst per Klick auf den Pause/Play-Button wieder
+  // Ausnahme. Ein frisch platzierter Spiegel AUF dem (alten) Pfad ändert diesen zwangsläufig —
+  // recomputeEnemyPath() pausiert danach automatisch das Spiel (siehe dort, generische Pfad-
+  // Änderungs-Erkennung), der Spieler muss das bewusst per Klick auf den Pause/Play-Button wieder
   // aufheben ("ich muss manuell wieder auf Start drücken").
   const onPath = isOnEnemyPath(cell)
   if (onPath && kind !== 'mirror') return
@@ -746,12 +893,14 @@ function finalizePlacement(pos: Point) {
     spend(inventory, 'lumen', BUILDING_COSTS.mirror)
     mirrors.push(createMirror(cell.col, cell.row))
     updateInfoTargetForCell(cell.col, cell.row, null)
+    maybeShowBuildingTip('mirror')
   } else if (kind === 'prism-simple' || kind === 'prism-complex') {
     const cost = kind === 'prism-simple' ? BUILDING_COSTS.prismSimple : BUILDING_COSTS.prismComplex
     if (!canAfford(inventory, 'lumen', cost)) return
     spend(inventory, 'lumen', cost)
     prisms.push(createPrism(cell.col, cell.row, kind === 'prism-simple' ? 'triangle' : 'hexagon'))
     updateInfoTargetForCell(cell.col, cell.row, null)
+    maybeShowBuildingTip(kind)
   } else {
     const resourceId = sourceResourceIdForPalette(kind)
     if (!resourceId) return
@@ -760,10 +909,10 @@ function finalizePlacement(pos: Point) {
     const source = createLightSource(cell.col, cell.row, resourceId)
     lightSources.push(source)
     updateInfoTargetForCell(cell.col, cell.row, { kind: 'source', id: source.id })
+    maybeShowBuildingTip('source')
   }
   rebuildOccupancy()
   recomputeEnemyPath()
-  if (onPath && kind === 'mirror') gamePaused = true
 }
 
 /** Irgendein Lichtquelle/Spiegel/Prisma (unabhängig vom Typ) anhand seiner Id finden — fürs
@@ -792,30 +941,26 @@ function finalizeMove(pos: Point) {
   if (onPath && movingKind !== 'mirror') return
 
   const occupantId = occupancy.get(cellKey(cell))
-  // Bug-Fix (User-Report): ein Tausch mit einem Spiegel, der GERADE auf dem Pfad steht, konnte den
-  // Tausch-Partner unbemerkt auf dessen (alten) Pfad-Platz setzen — der obige Check prüft nur das
-  // Ziel-Feld (`cell`), nicht die alte Zelle des gezogenen Gebäudes, auf der nach einem Tausch der
-  // PARTNER landet. Kein Blockieren mehr dafür (User-Vorgabe): stattdessen pausiert das genauso wie
-  // eine direkte Spiegel-Platzierung auf dem Pfad.
-  const originalCol = moving.col
-  const originalRow = moving.row
-  let otherId: string | null = null
+  // Ein Tausch mit einem Spiegel, der GERADE auf dem Pfad steht, kann den Tausch-Partner unbemerkt
+  // auf dessen (alten) Pfad-Platz setzen — der obige Check prüft nur das Ziel-Feld (`cell`), nicht
+  // die alte Zelle des gezogenen Gebäudes, auf der nach einem Tausch der PARTNER landet. Kein
+  // Blockieren dafür (User-Vorgabe): recomputeEnemyPath() erkennt die dadurch entstehende Pfad-
+  // Änderung generisch (siehe dort) und pausiert von selbst, genau wie jede andere Pfad-Änderung.
   if (occupantId && occupantId !== movingBuildingId) {
     const other = findEconomyBuilding(occupantId) ?? towers.find((t) => t.id === occupantId)
     if (!other) return
+    const originalCol = moving.col
+    const originalRow = moving.row
     moving.col = other.col
     moving.row = other.row
     other.col = originalCol
     other.row = originalRow
-    otherId = occupantId
   } else {
     moving.col = cell.col
     moving.row = cell.row
   }
   rebuildOccupancy()
-  recomputeEnemyPath()
-  if (onPath && movingKind === 'mirror') gamePaused = true
-  if (otherId && !mirrors.some((m) => m.id === otherId) && isOnEnemyPath({ col: originalCol, row: originalRow })) gamePaused = true
+  recomputeEnemyPath() // pausiert bei Bedarf automatisch, falls sich der Gegner-Pfad dadurch ändert (siehe dort)
 
   if (movingKind === 'source') updateInfoTargetForCell(cell.col, cell.row, { kind: 'source', id: movingBuildingId })
   else if (movingKind === 'mirror' || movingKind === 'prism') updateInfoTargetForCell(cell.col, cell.row, null)
@@ -866,6 +1011,7 @@ function finalizeTowerPlacement(pos: Point) {
   rebuildOccupancy()
   recomputeEnemyPath()
   updateInfoTargetForCell(cell.col, cell.row, { kind: 'tower', id: tower.id })
+  maybeShowBuildingTip(kind)
 }
 
 window.addEventListener('pointerup', (e) => {
@@ -904,7 +1050,15 @@ window.addEventListener('pointerup', (e) => {
       }
     } else if (pendingPress.kind === 'prism') {
       const prism = prisms.find((p) => p.id === pendingPress!.id)
-      if (prism) rotatePrism(prism)
+      // Dreht nur die Licht-Richtung (Prismen haben keinen Einfluss auf den Gegner-Pfad, siehe
+      // recomputeEnemyPath()-Kommentar) — braucht daher nur `lightNetworkDirty`, nicht den vollen
+      // recomputeEnemyPath()-Umweg. Vorher (Performance-Fix) hing das komplett am Jeden-Frame-
+      // Aufruf in economyTick(); ohne diese Zeile würde eine Prisma-Drehung jetzt gar nicht mehr
+      // sichtbar werden.
+      if (prism) {
+        rotatePrism(prism)
+        lightNetworkDirty = true
+      }
     } else {
       infoTarget = { kind: pendingPress.kind, id: pendingPress.id }
     }
@@ -921,6 +1075,12 @@ function drawEconomyPalette() {
 function drawTowerPalette() {
   for (const item of towerPaletteItems) {
     drawTowerPaletteItem(ctx!, item, canAfford(inventory, 'lumen', item.cost))
+  }
+  // Progress-System (User-Vorgabe): solange noch nicht alle Türme freigeschaltet sind, steht
+  // direkt hinter dem letzten sichtbaren Turm ein Hinweis-Platzhalter statt einfach nichts.
+  if (towerPaletteItems.length < TOWER_DEFINITIONS.length) {
+    const lastTower = towerPaletteItems[towerPaletteItems.length - 1]
+    if (lastTower) drawLockedTowerPlaceholder(ctx!, lastTower.x + PALETTE_GAP, lastTower.y)
   }
 }
 
@@ -965,7 +1125,7 @@ function drawPaletteTooltips() {
   // hoveredTowerItem nicht mehr (siehe early return dort) — ohne diese Sperre würde sonst ein
   // stehen gebliebenes Tooltip sichtbar bleiben. Eine Auswahl (infoTarget) blockiert das
   // Tooltip-Hovern absichtlich NICHT mehr (User-Vorgabe: nicht-blockierende Auswahl).
-  if (welcomeOpen) return
+  if (welcomeOpen || activeBuildingTip) return
   if (hoveredEconomyItem) {
     const item = hoveredEconomyItem
     drawLabel(ctx!, paletteItemDescription(item.kind), item.x, item.y - item.radius - 14, '13px monospace', COLORS.textBright, 15)
@@ -998,24 +1158,17 @@ function drawTowerPlacementPreview() {
   ctx!.restore()
 }
 
-/** User-Vorgabe: deutlich stärkerer Kontrast zwischen aktiv/inaktiv als zuvor (0.4) — ein
- * unterversorgter Turm soll klar erkennbar "abgeschaltet" wirken. Gilt NUR für "verkabelt, aber zu
- * schwach versorgt" (starved) — ein UNVERKABELTER Turm feuert bewusst weiter mit voller Deckkraft
- * (siehe hasAmmoAvailable()-Kommentar: das ist die absichtliche "Klarschuss ohne Effekt"-Baseline,
- * kein Fehlerzustand). */
+/** User-Vorgabe: deutlich stärkerer Kontrast als zuvor (0.4) — z. B. für Strahlen, die gerade ins
+ * Leere laufen (siehe drawWorld()). Türme kennen dagegen kein "unterversorgt" mehr (User-Vorgabe:
+ * "es ist nur relevant, ob der Lichtstrahl ankommt", keine Mindest-Stärke) — sie feuern IMMER mit
+ * voller Deckkraft, ob verkabelt oder nicht. */
 const INACTIVE_ALPHA = 0.18
 
 function drawTowers() {
   for (const tower of towers) {
-    const starved = tower.resourceId !== null && !hasAmmoAvailable(tower)
-    if (starved) {
-      ctx!.save()
-      ctx!.globalAlpha = INACTIVE_ALPHA
-    }
     const center = towerCenter(tower)
     drawTowerEntity(ctx!, tower, center)
     drawTowerLevelRing(ctx!, tower, center)
-    if (starved) ctx!.restore()
   }
 }
 
@@ -1082,8 +1235,6 @@ const SIDE_PANEL_WIDTH = 260
 const SIDE_PANEL_MARGIN = 24
 const SIDE_PANEL_TOP = HUD_HEIGHT + 120
 
-const ALL_GUIDE_COLORS = RESOURCES.filter((r) => r.tier !== 'special')
-
 // User-Vorgabe: "mach den Teil links... auch scrollbar" — der Farb-Guide ist mit allen 5 Tiers oft
 // höher als der verfügbare Platz (siehe drawColorGuideList()s eigene "Sicherheitsbremse", die
 // sonst einfach abschneidet). Eigenes Scroll-Offset + Mausrad-Handling (siehe canvas
@@ -1113,12 +1264,20 @@ function drawLeftSidebar() {
   const bounds = leftSidebarListBounds()
   drawColorGuideSidebarTitle(ctx!, bounds.x, SIDE_PANEL_TOP)
 
+  // Progress-System (User-Vorgabe): noch gesperrte Tiers tauchen im Guide gar nicht erst auf —
+  // sonst sähe der Spieler volle Rezepte für Farben, die er noch gar nicht mischen kann (siehe
+  // unlockedColorTiers/updateColorTierUnlocks()), was demselben "nicht überfordern"-Ziel wie beim
+  // Türme-Freischalten widerspräche. Statt der gesperrten Karten steht dort ein Hinweis-Platzhalter
+  // fürs nächste (erste noch gesperrte) Tier, falls es eins gibt.
+  const unlockedGuideColors = RESOURCES.filter((r) => r.tier !== 'special' && unlockedColorTiers.has(r.tier))
+  const nextLockedTier = ([2, 3, 4, 5] as ResourceTier[]).find((t) => !unlockedColorTiers.has(t)) ?? null
+
   ctx!.save()
   ctx!.beginPath()
   ctx!.rect(bounds.x, bounds.y, bounds.width, bounds.height)
   ctx!.clip()
   ctx!.translate(0, -leftSidebarScrollY)
-  const contentBottom = drawColorGuideList(ctx!, bounds.x, bounds.y, bounds.width, 100000, ALL_GUIDE_COLORS)
+  const contentBottom = drawColorGuideList(ctx!, bounds.x, bounds.y, bounds.width, 100000, unlockedGuideColors, nextLockedTier)
   ctx!.restore()
 
   leftSidebarMaxScroll = Math.max(0, contentBottom - bounds.y - bounds.height)
@@ -1438,8 +1597,9 @@ function selectedRows(target: InfoTarget): { title: string; rows: SelectedRow[];
   if (!tower) return null
   const def = getTowerDefinition(tower.kind)
   const stats = getEffectiveTowerStats(tower)
-  const ammo = lightSimulation.towerAmmo.get(tower.id)
-  const ammoLabel = tower.resourceId ? `${getResource(tower.resourceId).name} (strength ${ammo?.strength ?? 0})` : '— (not connected)'
+  // User-Vorgabe: keine Mindest-Stärke mehr — sobald überhaupt ein Strahl ankommt (tower.resourceId
+  // gesetzt, siehe economyTick()), ist der Turm versorgt, kein "(Shortage!)"/Stärke-Wert mehr nötig.
+  const ammoLabel = tower.resourceId ? getResource(tower.resourceId).name : '— (not connected)'
   const maxed = tower.level >= TOWER_MAX_LEVEL
   const upgradeCost = maxed ? null : towerUpgradeCost(def, tower.level + 1)
   return {
@@ -1447,13 +1607,12 @@ function selectedRows(target: InfoTarget): { title: string; rows: SelectedRow[];
     upgradeCost,
     interactive: true,
     rows: [
-      { label: 'Ammo', value: tower.resourceId && !hasAmmoAvailable(tower) ? `${ammoLabel} (Shortage!)` : ammoLabel },
+      { label: 'Ammo', value: ammoLabel },
       { label: 'Level', value: maxed ? `${tower.level}/${TOWER_MAX_LEVEL} (max)` : `${tower.level}/${TOWER_MAX_LEVEL}`, action: maxed ? undefined : 'level' },
       { label: 'Damage', value: stats.damage.toFixed(1) },
       { label: 'Range', value: `${(stats.range / hexColumnWidth(placementGrid)).toFixed(1)} cells` },
       { label: 'Attack Speed', value: `${(1 / stats.fireInterval).toFixed(2)}/s` },
       { label: 'Projectile Speed', value: stats.projectileSpeed ? `${stats.projectileSpeed.toFixed(0)}px/s` : '—' },
-      { label: 'Consumption', value: `${stats.consumption.toFixed(1)}/s` },
     ],
   }
 }
@@ -1578,8 +1737,7 @@ function drawMovePreview() {
 
 /** Das gemeinsame Raster: Rasterlinien + Gegner-Pfad (inkl. Endpunkt-Stein + Einlauf-Marker) + Lichtstrahlen +
  * Max-Level-Marker + alle Gebäude (Lichtquellen/Spiegel/Prismen) — Türme werden separat danach
- * gezeichnet (siehe drawTowers(), für die richtige Ziel-Priorität beim Klicken sowie den
- * "Shortage"-Alpha-Effekt). */
+ * gezeichnet (siehe drawTowers(), für die richtige Ziel-Priorität beim Klicken). */
 function drawWorld() {
   drawPlacementGrid(ctx!, placementGrid, COLORS.gridLineStrong)
 
@@ -1617,24 +1775,30 @@ function drawWorld() {
 
 let elapsedSeconds = 0
 
-/** Ob ein Turm gerade tatsächlich feuern kann: ohne Verkabelung immer ja (Klarschuss ohne
- * Effekt), verkabelt nur, solange die ankommende Strahl-Stärke seine `consumption` deckt — geht
- * die Strahl-Stärke unter den Bedarf, hört der Turm auf zu schießen, statt weiter "auf Kredit" zu
- * feuern (siehe economy/lightSimulation.ts für die Stärke-Berechnung). */
-function hasAmmoAvailable(tower: PlacedTower): boolean {
-  if (!tower.resourceId) return true
-  const ammo = lightSimulation.towerAmmo.get(tower.id)
-  return (ammo?.strength ?? 0) >= getEffectiveTowerStats(tower).consumption
-}
-
 function economyTick(dt: number) {
   elapsedSeconds += dt
-  recomputeLightSimulation()
-  // Munition kommt jetzt live aus der Strahl-Verkabelung (User-Vorgabe) — kein manuelles
-  // Zuweisen mehr, kein globaler Ratenpool: jeder Turm übernimmt jeden Frame direkt, welche Farbe
-  // (falls überhaupt eine) ihn gerade erreicht (siehe economy/lightSimulation.ts towerAmmo).
-  for (const tower of towers) {
-    tower.resourceId = lightSimulation.towerAmmo.get(tower.id)?.resourceId ?? null
+
+  // Performance-Fix (User-Vorgabe: FPS-Einbrüche "ab einer gewissen Anzahl an Türmen und
+  // Verbindungen") — simulateLight() nur noch neu berechnen, wenn sich seit dem letzten Mal
+  // wirklich etwas an seinen Eingaben geändert hat (siehe `lightNetworkDirty`-Kommentar oben),
+  // statt bedingungslos 60x/Sekunde. Ein neu freigeschaltetes Farb-Tier ändert selbst wieder eine
+  // Eingabe von simulateLight() (`unlockedColorTiers`) — dafür sofort im nächsten Tick erneut dirty
+  // markieren, statt bis zur nächsten ECHTEN Bau-Änderung zu warten.
+  if (lightNetworkDirty) {
+    recomputeLightSimulation()
+    lightNetworkDirty = false
+    const tierCountBefore = unlockedColorTiers.size
+    updateColorTierUnlocks()
+    if (unlockedColorTiers.size > tierCountBefore) lightNetworkDirty = true
+
+    // Munition kommt live aus der Strahl-Verkabelung (User-Vorgabe) — kein manuelles Zuweisen
+    // mehr, kein globaler Ratenpool: jeder Turm übernimmt direkt, welche Farbe (falls überhaupt
+    // eine) ihn gerade erreicht (siehe economy/lightSimulation.ts towerAmmo). Nur hier nötig, NICHT
+    // mehr jeden Frame separat — die Zuordnung ändert sich ja nur, wenn `lightSimulation` selbst
+    // gerade neu berechnet wurde.
+    for (const tower of towers) {
+      tower.resourceId = lightSimulation.towerAmmo.get(tower.id)?.resourceId ?? null
+    }
   }
 }
 
@@ -1647,11 +1811,18 @@ function combatTick(dt: number) {
   if (tickWaveSpawning(waveState, dt, enemies)) {
     damageByLoadout = new Map()
     enemiesResolvedInWave = 0
+    // Progress-System (User-Vorgabe): `highestWaveReached` (im Gegensatz zu `waveState.currentWave`)
+    // sinkt NIE, auch nicht durch einen Base-HP-Softreset — schaltet ggf. neue Türme dauerhaft frei
+    // (siehe render/towerRender.ts buildTowerPalette()), buildScene() baut die Kauf-Leiste dafür neu.
+    if (waveState.currentWave > highestWaveReached) {
+      highestWaveReached = waveState.currentWave
+      buildScene()
+    }
   }
 
   for (const enemy of enemies) tickEnemy(enemy, dt, elapsedSeconds, enemyPathLength)
 
-  updateTowers(towers, enemies, dt, elapsedSeconds, enemyPathPixels, towerCenter, hasAmmoAvailable, projectiles, visualEffects, damageByLoadout)
+  updateTowers(towers, enemies, dt, elapsedSeconds, enemyPathPixels, towerCenter, projectiles, visualEffects, damageByLoadout)
   projectiles = updateProjectiles(projectiles, enemies, dt, elapsedSeconds, enemyPathPixels, visualEffects, damageByLoadout)
   visualEffects = pruneVisualEffects(visualEffects, elapsedSeconds)
 
@@ -1700,7 +1871,8 @@ function render(_dt: number) {
   drawBaseDestroyedMessage()
   drawHud(ctx!, width, playerName, playerLevel, hudButtons, demolishMode, gamePaused)
 
-  if (welcomeOpen) drawWelcomePanel(ctx!, width, height)
+  if (welcomeOpen) drawWelcomePanel(ctx!, width, height, tipsDisabled)
+  else if (activeBuildingTip) drawBuildingTipPanel(ctx!, width, height, activeBuildingTip)
 }
 
 startGameLoop({ economyTick, combatTick, render })

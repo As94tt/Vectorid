@@ -1,6 +1,7 @@
 import { COLORS } from '../constants/colors'
 import { getResource } from '../data/resources'
 import { defaultTowerRotation, getTowerDefinition, TOWER_DEFINITIONS, TOWER_MAX_LEVEL, type PlacedTower, type TowerKind } from '../towerdefense/towers'
+import { wrapLines } from './referencePanels'
 import { drawCircle, drawHalfCircle, drawHexagon, drawPentagon, drawSquare, drawStar, drawTriangle } from './shapes'
 import { drawCard, drawCenteredCostTag } from './ui'
 
@@ -76,11 +77,16 @@ export function drawTowerLevelRing(ctx: CanvasRenderingContext2D, tower: PlacedT
   const color = tower.resourceId ? getResource(tower.resourceId).color : TOWER_UNSELECTED_COLOR
   const active = activeLevelPips(tower.level)
 
+  // Performance: EIN save()/restore() für alle 5 Pips statt vorher eins PRO Pip — bei vielen
+  // Türmen (siehe User-Report "FPS-Einbrüche ab einer gewissen Anzahl an Türmen") sind das 5x
+  // weniger Canvas-Zustandswechsel pro Turm und Frame. `shadowBlur` wird nach einem aktiven Pip
+  // explizit wieder auf 0 gesetzt, damit es nicht in den Stroke eines nachfolgenden inaktiven
+  // Pips "durchsickert" (kein save()/restore() mehr dazwischen, das das sonst automatisch täte).
+  ctx.save()
   for (let i = 0; i < LEVEL_PIP_COUNT; i++) {
     const angle = -Math.PI / 2 + i * LEVEL_PIP_ANGLE_STEP
     const px = center.x + LEVEL_PIP_ORBIT_RADIUS * Math.cos(angle)
     const py = center.y + LEVEL_PIP_ORBIT_RADIUS * Math.sin(angle)
-    ctx.save()
     ctx.beginPath()
     ctx.arc(px, py, LEVEL_PIP_RADIUS, 0, Math.PI * 2)
     if (i < active) {
@@ -88,13 +94,14 @@ export function drawTowerLevelRing(ctx: CanvasRenderingContext2D, tower: PlacedT
       ctx.shadowColor = color
       ctx.shadowBlur = 5
       ctx.fill()
+      ctx.shadowBlur = 0
     } else {
       ctx.strokeStyle = COLORS.gridLineStrong
       ctx.lineWidth = 1
       ctx.stroke()
     }
-    ctx.restore()
   }
+  ctx.restore()
 }
 
 // --- Turm-Kauf-Reihe (Reihe 1 der zweizeiligen Kauf-Leiste — siehe buildingRender.ts
@@ -128,8 +135,13 @@ function paletteCardBounds(item: { x: number; y: number }) {
   return { x: item.x - CARD_WIDTH / 2, y: item.y - CARD_TOP_OFFSET, w: CARD_WIDTH, h: CARD_HEIGHT }
 }
 
-export function buildTowerPalette(startX: number, y: number, gap: number): TowerPaletteItem[] {
-  return TOWER_DEFINITIONS.map((def, i) => ({
+/** Progress-System (User-Vorgabe): nur Türme, deren `unlockWave` main.ts' dauerhaftem
+ * `highestWaveReached` schon erreicht ist, bekommen überhaupt eine Kauf-Leisten-Karte — noch
+ * gesperrte Türme werden nicht etwa nur ausgegraut, sondern komplett weggelassen (kein Slot),
+ * damit die Leiste am Anfang bewusst kurz/übersichtlich bleibt (User-Vorgabe: "damit man nicht von
+ * Anfang an alle Sachen hat und mit der Masse überfordert ist"). */
+export function buildTowerPalette(startX: number, y: number, gap: number, highestWaveReached: number): TowerPaletteItem[] {
+  return TOWER_DEFINITIONS.filter((def) => def.unlockWave <= highestWaveReached).map((def, i) => ({
     kind: def.kind,
     name: def.name,
     cost: def.cost,
@@ -169,6 +181,38 @@ export function drawTowerPaletteItem(ctx: CanvasRenderingContext2D, item: TowerP
   ctx.fillText(item.name, item.x, item.y + item.radius + 14)
   ctx.font = '12px monospace'
   drawCenteredCostTag(ctx, item.x, item.y + item.radius + 26, item.cost, item.costResourceId, getResource(item.costResourceId).color)
+  ctx.restore()
+}
+
+const LOCKED_TOWER_MESSAGE = 'Reach the next milestone to unlock new towers.'
+// Doppelt so breit wie eine normale Kauf-Karte (+ ein bisschen für den sonst üblichen
+// Zwischenraum) — der Hinweistext braucht mehr Platz als eine einzelne 56px-Karte hergibt.
+const LOCKED_PLACEHOLDER_WIDTH = CARD_WIDTH * 2 + 8
+
+/** Progress-System (User-Vorgabe): steht direkt hinter dem letzten aktuell freigeschalteten
+ * Turm in der Kauf-Leiste, solange noch nicht alle Türme freigeschaltet sind (siehe main.ts
+ * highestWaveReached/TOWER_DEFINITIONS[].unlockWave) — bewusst ohne Formen-Icon (es gibt ja noch
+ * keins zu zeigen), der exakte Wortlaut ist User-Vorgabe. `nextSlotCenterX` ist die Mitte, an der
+ * die nächste (noch gesperrte) Karte normalerweise stünde — die Platzhalter-Karte startet an
+ * GENAU deren linker Kante (identischer Abstand zur letzten sichtbaren Karte wie sonst zwischen
+ * zwei Karten üblich) und wächst von dort aus nur nach RECHTS über die doppelte Breite, statt
+ * symmetrisch um `nextSlotCenterX` (das würde in die letzte sichtbare Karte hineinragen). */
+export function drawLockedTowerPlaceholder(ctx: CanvasRenderingContext2D, nextSlotCenterX: number, y: number) {
+  const leftX = nextSlotCenterX - CARD_WIDTH / 2
+  const bounds = { x: leftX, y: y - CARD_TOP_OFFSET, w: LOCKED_PLACEHOLDER_WIDTH, h: CARD_HEIGHT }
+  drawCard(ctx, bounds.x, bounds.y, bounds.w, bounds.h)
+
+  const centerX = leftX + LOCKED_PLACEHOLDER_WIDTH / 2
+  ctx.save()
+  ctx.textAlign = 'center'
+  ctx.fillStyle = COLORS.textDim
+  ctx.font = '11px monospace'
+  const lines = wrapLines(ctx, LOCKED_TOWER_MESSAGE, bounds.w - 20, 4)
+  let lineY = bounds.y + bounds.h / 2 - ((lines.length - 1) * 15) / 2 + 4
+  for (const line of lines) {
+    ctx.fillText(line, centerX, lineY)
+    lineY += 15
+  }
   ctx.restore()
 }
 

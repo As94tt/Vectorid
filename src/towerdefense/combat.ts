@@ -279,9 +279,10 @@ function updateBurst(
 
 /** Aktualisiert alle Türme für einen Frame: Cooldown runterzählen, Ziel(e) suchen, ggf. feuern.
  * Neue Projektile/Vorschau-Effekte werden in die übergebenen Arrays gepusht (Aufrufer hält die
- * Referenzen), Gegner werden direkt per `treatHit()` mutiert. `hasAmmo` prüft (in main.ts, gegen
- * die aktuelle Ressourcen-Netto-Rate), ob die zugewiesene Munition gerade tatsächlich verfügbar
- * ist — ist sie es nicht mehr, feuert der Turm überhaupt nicht. */
+ * Referenzen), Gegner werden direkt per `treatHit()` mutiert. Kein Munitions-Verfügbarkeits-Gate
+ * mehr (User-Vorgabe: "es ist nur relevant, ob der Lichtstrahl ankommt", keine Mindest-Stärke) —
+ * ein Turm feuert entweder unverkabelt ("Klarschuss ohne Effekt") oder mit der Farbe, die ihn
+ * gerade per Strahl erreicht (siehe main.ts economyTick()), ohne weitere Bedingung. */
 export function updateTowers(
   towers: PlacedTower[],
   enemies: Enemy[],
@@ -289,7 +290,6 @@ export function updateTowers(
   elapsedSeconds: number,
   pathPixels: Point[],
   towerCenter: (tower: PlacedTower) => Point,
-  hasAmmo: (tower: PlacedTower) => boolean,
   projectiles: Projectile[],
   effects: VisualEffect[],
   damageByLoadout: Map<string, number>,
@@ -301,13 +301,6 @@ export function updateTowers(
     const def: TowerDefinition = { ...getTowerDefinition(tower.kind), ...getEffectiveTowerStats(tower) }
     const center = towerCenter(tower)
     tower.cooldown = Math.max(0, tower.cooldown - dt)
-
-    if (!hasAmmo(tower)) {
-      tower.charging = false
-      tower.chargeElapsed = 0
-      tower.active = false
-      continue
-    }
 
     switch (tower.kind) {
       case 'pulse':

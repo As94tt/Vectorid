@@ -29,17 +29,17 @@ export interface TowerDefinition {
   chargeTime?: number
   /** Nur Burst: wie viele Projektile eine Salve auf einmal abfeuert. */
   volleyCount?: number
-  /** Einheiten/Sekunde der zugewiesenen Munitionsfarbe, die dieser Turm braucht, um "versorgt" zu
-   * bleiben (siehe main.ts hasAmmoAvailable() — ersetzt den früheren globalen TOWER_AMMO_DRAIN).
-   * Platzhalter-Werte, grob an Feuerrate/Schaden orientiert, noch nicht ausbalanciert. */
-  consumption: number
+  /** Progress-System (User-Vorgabe): ab welcher Welle dieser Turm überhaupt in der Kauf-Leiste
+   * auftaucht — 1 heißt von Anfang an verfügbar. Dauerhaft freigeschaltet, sobald `main.ts`
+   * `highestWaveReached` diesen Wert erreicht (siehe dort), auch nach einem Base-HP-Softreset
+   * (der setzt nur `waveState.currentWave` zurück, NICHT den Fortschritt). */
+  unlockWave: number
 }
 
+// User-Vorgabe (Progress-System): Reihenfolge + Freischalt-Wellen. Start (Welle 1): nur Rapid.
+// Welle 5: Cannon. Welle 10: Sniper. Welle 15: Multishot UND Pulse zusammen. Welle 20: Flamethrower.
+// Welle 30: Burst. Welle 40: Beam.
 export const TOWER_DEFINITIONS: TowerDefinition[] = [
-  // User-Vorgabe (Balance): Pulse ist für Stack-Verbreitung da, nicht für Schaden — Grundschaden
-  // drastisch runter (8 -> 3), dafür deutlich schnellere Feuerrate (1.0s -> 0.65s Intervall), damit
-  // es weiterhin oft genug trifft, um Stacks (Burn/Poison/Slow/...) zuverlässig aufzubauen.
-  { kind: 'pulse', name: 'Pulse', description: '360° pulses, short range, hits many enemies', cost: 15, range: 90, damage: 3, fireInterval: 0.65, consumption: 1 },
   {
     kind: 'rapid',
     name: 'Rapid',
@@ -49,7 +49,7 @@ export const TOWER_DEFINITIONS: TowerDefinition[] = [
     damage: 3,
     fireInterval: 0.15,
     projectileSpeed: 500,
-    consumption: 2,
+    unlockWave: 1,
   },
   {
     kind: 'cannon',
@@ -61,7 +61,19 @@ export const TOWER_DEFINITIONS: TowerDefinition[] = [
     fireInterval: 1.4,
     projectileSpeed: 180,
     splashRadius: 42,
-    consumption: 1.5,
+    unlockWave: 5,
+  },
+  {
+    // User-Vorgabe (Balance): Feuerrate leicht erhöht (Intervall 2.2s -> 2.0s).
+    kind: 'sniper',
+    name: 'Sniper',
+    description: 'Slow, long range, high single-target damage',
+    cost: 40,
+    range: 230,
+    damage: 34,
+    fireInterval: 2.0,
+    projectileSpeed: 900,
+    unlockWave: 10,
   },
   {
     // User-Vorgabe (Balance): Schaden leicht erhöht (6 -> 7).
@@ -74,19 +86,20 @@ export const TOWER_DEFINITIONS: TowerDefinition[] = [
     fireInterval: 0.9,
     projectileSpeed: 420,
     projectileCount: 3,
-    consumption: 2,
+    unlockWave: 15,
   },
   {
-    // User-Vorgabe (Balance): Feuerrate leicht erhöht (Intervall 2.2s -> 2.0s).
-    kind: 'sniper',
-    name: 'Sniper',
-    description: 'Slow, long range, high single-target damage',
-    cost: 40,
-    range: 230,
-    damage: 34,
-    fireInterval: 2.0,
-    projectileSpeed: 900,
-    consumption: 1.5,
+    // User-Vorgabe (Balance): Pulse ist für Stack-Verbreitung da, nicht für Schaden — Grundschaden
+    // drastisch runter (8 -> 3), dafür deutlich schnellere Feuerrate (1.0s -> 0.65s Intervall),
+    // damit es weiterhin oft genug trifft, um Stacks (Burn/Poison/Slow/...) zuverlässig aufzubauen.
+    kind: 'pulse',
+    name: 'Pulse',
+    description: '360° pulses, short range, hits many enemies',
+    cost: 15,
+    range: 90,
+    damage: 3,
+    fireInterval: 0.65,
+    unlockWave: 15,
   },
   {
     kind: 'flamethrower',
@@ -97,9 +110,8 @@ export const TOWER_DEFINITIONS: TowerDefinition[] = [
     damage: 4,
     fireInterval: 0.15,
     coneAngle: 55,
-    consumption: 2.5,
+    unlockWave: 20,
   },
-  { kind: 'beam', name: 'Beam', description: 'Permanent laser locked on one target', cost: 60, range: 150, damage: 5, fireInterval: 0.15, consumption: 2.5 },
   {
     // User-Vorgabe (Balance): Feuerrate leicht erhöht (Intervall nach der Salve 2.0s -> 1.8s).
     kind: 'burst',
@@ -112,7 +124,17 @@ export const TOWER_DEFINITIONS: TowerDefinition[] = [
     projectileSpeed: 480,
     chargeTime: 1.6,
     volleyCount: 5,
-    consumption: 2,
+    unlockWave: 30,
+  },
+  {
+    kind: 'beam',
+    name: 'Beam',
+    description: 'Permanent laser locked on one target',
+    cost: 60,
+    range: 150,
+    damage: 5,
+    fireInterval: 0.15,
+    unlockWave: 40,
   },
 ]
 
@@ -148,7 +170,6 @@ export interface EffectiveTowerStats {
   fireInterval: number
   projectileSpeed?: number
   splashRadius?: number
-  consumption: number
 }
 
 export function getEffectiveTowerStats(tower: PlacedTower): EffectiveTowerStats {
@@ -162,7 +183,6 @@ export function getEffectiveTowerStats(tower: PlacedTower): EffectiveTowerStats 
     fireInterval: def.fireInterval / mult,
     projectileSpeed: def.projectileSpeed !== undefined ? def.projectileSpeed * mult : undefined,
     splashRadius: def.splashRadius !== undefined ? def.splashRadius * mult : undefined,
-    consumption: def.consumption * mult,
   }
 }
 

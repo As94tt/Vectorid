@@ -11,9 +11,10 @@ import { createEnemy, ENEMY_BASE_SIZE, type Enemy } from './enemies'
 
 export const ENEMIES_PER_WAVE = 20
 export const WAVE_SPAWN_INTERVAL = 0.5 // Sekunden zwischen 2 Spawns innerhalb einer Welle
-export const WAVE_PAUSE_SECONDS = 5
+// User-Vorgabe: beide Pausen um weitere 5 bzw. 10 Sekunden verlängert (5 -> 10, 10 -> 20).
+export const WAVE_PAUSE_SECONDS = 10
 /** Nach einer Boss-Welle (User-Vorgabe) länger Pause als sonst, damit man kurz durchatmen kann. */
-export const BOSS_WAVE_PAUSE_SECONDS = 10
+export const BOSS_WAVE_PAUSE_SECONDS = 20
 export const BOSS_WAVE_INTERVAL = 10
 
 // Platzhalter-Balancing (wie überall in diesem Projekt): reine Funktion der Wellennummer.
